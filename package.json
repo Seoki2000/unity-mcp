@@ -1,0 +1,31 @@
+{
+  "name": "com.community.unity-mcp",
+  "version": "2.2.1",
+  "displayName": "Unity MCP Server (Optimized Fork)",
+  "description": "Model Context Protocol (MCP) server for Unity. Optimized fork: reduced token usage (compact JSON, capped responses) and editor-reload threading fixes. Forked from usmanbutt-dev/unity-mcp.",
+  "unity": "2021.3",
+  "unityRelease": "0f1",
+  "documentationUrl": "https://github.com/Seoki2000/unity-mcp#readme",
+  "changelogUrl": "https://github.com/Seoki2000/unity-mcp/blob/main/CHANGELOG.md",
+  "licensesUrl": "https://github.com/Seoki2000/unity-mcp/blob/main/LICENSE",
+  "keywords": [
+    "mcp",
+    "ai",
+    "llm",
+    "agent",
+    "antigravity",
+    "claude",
+    "gemini"
+  ],
+  "author": {
+    "name": "Usman Butt",
+    "url": "https://github.com/usmanbutt-dev"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Seoki2000/unity-mcp.git"
+  },
+  "type": "tool",
+  "dependencies": {},
+  "_fingerprint": "19486cf5696bbd87ae315eada2ff989e00a691f4"
+}
