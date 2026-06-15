@@ -1,4 +1,4 @@
-# Unity MCP Server (Optimized Fork)
+# Unity MCP Server (최적화 포크)
 
 > **포크 안내** — 이 저장소는 [usmanbutt-dev/unity-mcp](https://github.com/usmanbutt-dev/unity-mcp) (MIT)의 최적화 포크입니다.
 > 원본 대비 변경점:
@@ -8,215 +8,206 @@
 >
 > 라이선스(MIT)는 원본을 따릅니다 — `LICENSE` 참조.
 
-## 사용법 (Unity Package Manager)
-`Packages/manifest.json` 의 `dependencies` 에 추가:
+[![Unity 2021.3+](https://img.shields.io/badge/Unity-2021.3%2B-blue.svg)](https://unity.com)
+[![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
+[![MCP](https://img.shields.io/badge/MCP-Compatible-purple.svg)](https://modelcontextprotocol.io)
+[![Version](https://img.shields.io/badge/Version-2.2.1-orange.svg)](CHANGELOG.md)
+
+AI 에이전트가 Unity 에디터를 **조회·제어**할 수 있게 해주는 **MCP(Model Context Protocol)** 서버입니다.
+
+## MCP란?
+
+MCP는 Anthropic이 만든 개방형 표준으로, AI가 외부 도구·데이터에 접근할 수 있게 합니다. 이 패키지는 Unity를 MCP 서버로 만들어 **Claude / Cursor / Antigravity** 같은 AI가 씬·에셋을 조회하고 에디터 명령을 실행하게 해줍니다.
+
+## 기능
+
+- 🎮 **씬 계층** — 게임오브젝트/컴포넌트/구조 조회
+- ✏️ **쓰기 작업** — 게임오브젝트 생성/삭제/수정 (실시간)
+- 🧩 **컴포넌트 제어** — 추가/제거/속성 설정
+- 🎬 **씬 관리** — 열기/저장/생성/관리
+- 🏷️ **프리팹 도구** — 인스턴스화/생성/검사
+- 📦 **에셋 브라우저** — 프로젝트 에셋 목록/검색
+- 📁 **리소스 접근** — 스크립트/프리팹/ScriptableObject 읽기
+- 📋 **콘솔 접근** — 콘솔 로그 읽기/지우기
+- ⚙️ **에디터 제어** — 메뉴 실행, 오브젝트 선택
+- 🔧 **컴파일 상태** — 빌드 에러/경고 확인
+- 📷 **스크린샷** — Game/Scene 뷰 캡처
+- 🔍 **프로젝트 검색** — 이름/내용/참조로 검색
+- ▶️ **플레이 모드 제어** — 진입/종료/일시정지
+- 🎮 **입력 시뮬레이션** — 키보드/마우스/UI 조작
+- 🔒 **보안** — localhost 전용, 외부 접근 없음
+
+## 설치 (Unity Package Manager)
+
+### Git URL로 추가 (권장)
+1. `Window > Package Manager` 열기
+2. `+` > `Add package from git URL...` 클릭
+3. 아래 입력:
+   ```
+   https://github.com/Seoki2000/unity-mcp.git
+   ```
+
+또는 `Packages/manifest.json`의 `dependencies`에 직접 추가:
 ```json
 "com.community.unity-mcp": "https://github.com/Seoki2000/unity-mcp.git"
 ```
 
----
+## 빠른 시작
 
-[![Unity 2021.3+](https://img.shields.io/badge/Unity-2021.3%2B-blue.svg)](https://unity.com)
-[![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
-[![MCP](https://img.shields.io/badge/MCP-Compatible-purple.svg)](https://modelcontextprotocol.io)
-[![Version](https://img.shields.io/badge/Version-2.2.0-orange.svg)](CHANGELOG.md)
+1. Unity가 로드되면 서버가 **자동 시작**됩니다
+2. `Window > MCP Server`로 상태 확인
+3. **"Copy Config to Clipboard"** 클릭
+4. 사용하는 MCP 클라이언트 설정 파일에 붙여넣기
 
-A **Model Context Protocol (MCP)** server for Unity that enables AI agents to **query and control** the Unity Editor.
+## 제공 도구 (총 52개)
 
-## What is MCP?
+### 게임오브젝트
+| 도구 | 설명 |
+|------|------|
+| `unity_create_gameobject` | 게임오브젝트 생성 (기본 도형 지원) |
+| `unity_delete_gameobject` | 씬에서 게임오브젝트 삭제 |
+| `unity_set_transform` | 위치/회전/스케일 설정 |
+| `unity_add_component` | 컴포넌트 추가 |
+| `unity_remove_component` | 컴포넌트 제거 |
+| `unity_set_component_property` | 컴포넌트 속성 값 설정 |
 
-MCP is an open standard by Anthropic that allows AI systems to access external tools and data. This package turns Unity into an MCP server, letting AI assistants like **Antigravity**, **Claude**, and **Cursor** query your scenes, assets, and execute editor commands.
+### 계층(Hierarchy)
+| 도구 | 설명 |
+|------|------|
+| `unity_get_hierarchy` | 씬 게임오브젝트 계층 조회 |
+| `unity_get_gameobject` | 특정 게임오브젝트 상세 조회 |
+| `unity_get_components` | 게임오브젝트의 컴포넌트 목록 |
 
-## Features
+### 프리팹
+| 도구 | 설명 |
+|------|------|
+| `unity_instantiate_prefab` | 씬에 프리팹 인스턴스화 |
+| `unity_get_prefab_info` | 프리팹 구조 조회 |
+| `unity_create_prefab` | 게임오브젝트로 프리팹 생성 |
+| `unity_unpack_prefab` | 프리팹 인스턴스 언팩 |
 
-- 🎮 **Scene Hierarchy** - Query GameObjects, components, and structure
-- ✏️ **Write Operations** - Create, delete, and modify GameObjects in real-time
-- 🧩 **Component Control** - Add, remove, and configure components
-- 🎬 **Scene Management** - Open, save, create, and manage scenes
-- 🏷️ **Prefab Tools** - Instantiate, create, and inspect prefabs
-- 📦 **Asset Browser** - List and search project assets
-- 📁 **Resource Access** - Read scripts, prefabs, and ScriptableObjects
-- 📋 **Console Access** - Read and clear Unity console logs
-- ⚙️ **Editor Control** - Execute menu items, select objects
-- 🔧 **Compilation Status** - Monitor build errors and warnings
-- 📷 **Screenshots** - Capture Game View or Scene View (v2.1)
-- 🔍 **Project Search** - Search by name, content, or references (v2.1)
-- ▶️ **Play Mode Control** - Enter/exit/pause play mode (v2.1)
-- 🎮 **Input Simulation** - Keyboard, mouse, and UI interactions (v2.1)
-- 📋 **Schema Support** - Full JSON Schema for all tool parameters (v2.1)
-- 🔒 **Secure** - Localhost only, no external access
+### 씬
+| 도구 | 설명 |
+|------|------|
+| `unity_get_scenes` | 프로젝트 씬 목록 |
+| `unity_open_scene` | 씬 열기 |
+| `unity_save_scene` | 현재 씬 저장 |
+| `unity_new_scene` | 새 씬 생성 |
+| `unity_close_scene` | 씬 닫기 |
+| `unity_set_active_scene` | 활성 씬 설정 |
 
-## Installation
+### 에셋 & 에디터
+| 도구 | 설명 |
+|------|------|
+| `unity_get_assets` | 폴더 내 에셋 목록 |
+| `unity_get_project_settings` | 프로젝트 설정 조회 |
+| `unity_get_console_logs` | 최근 콘솔 로그 |
+| `unity_clear_console` | 콘솔 지우기 |
+| `unity_execute_menu` | 메뉴 항목 실행 |
+| `unity_select_object` | 게임오브젝트 선택 |
+| `unity_get_selection` | 현재 선택 조회 |
+| `unity_get_editor_state` | 에디터 재생/일시정지 상태 |
 
-### Via Git URL (Recommended)
+### 컴파일
+| 도구 | 설명 |
+|------|------|
+| `unity_get_compilation_status` | 컴파일 에러/경고 조회 |
+| `unity_recompile_scripts` | 강제 재컴파일 |
+| `unity_get_assemblies` | 프로젝트 어셈블리 목록 |
 
-1. Open `Window > Package Manager`
-2. Click `+` > `Add package from git URL...`
-3. Enter:
-   ```
-   https://github.com/usmanbutt-dev/unity-mcp.git
-   ```
+### 스크린샷 & 검색
+| 도구 | 설명 |
+|------|------|
+| `unity_take_screenshot` | Game/Scene 뷰를 base64 PNG로 캡처 |
+| `unity_search_project` | 이름/내용/참조로 검색 |
 
-## Quick Start
+### 플레이 모드 & 입력
+| 도구 | 설명 |
+|------|------|
+| `unity_enter_play_mode` | 플레이 모드 진입 |
+| `unity_exit_play_mode` | 플레이 모드 종료 |
+| `unity_pause_play_mode` | 플레이 모드 일시정지/해제 |
+| `unity_simulate_key` | 키보드 입력 시뮬레이션 |
+| `unity_simulate_mouse` | 마우스 클릭 시뮬레이션 |
+| `unity_click_ui_element` | 이름으로 UI 버튼/토글 클릭 |
 
-1. The server **auto-starts** when Unity loads
-2. Open `Window > MCP Server` to view status
-3. Click **"Copy Config to Clipboard"**
-4. Paste into your MCP client's configuration file
+### 애니메이션
+| 도구 | 설명 |
+|------|------|
+| `unity_set_animator_parameter` | bool/float/int/trigger 파라미터 설정 |
+| `unity_get_animator_info` | 애니메이터 상태/파라미터/레이어 조회 |
+| `unity_play_animation` | 이름으로 애니메이션 상태 재생 |
 
-## Available Tools (52 Total)
+### 머티리얼 & 셰이더
+| 도구 | 설명 |
+|------|------|
+| `unity_get_material_info` | 머티리얼 속성/셰이더 조회 |
+| `unity_set_material_property` | color/float/int/vector 속성 설정 |
+| `unity_set_material` | 렌더러에 머티리얼 할당 |
 
-### GameObject Tools
-| Tool | Description |
-|------|-------------|
-| `unity_create_gameobject` | Create new GameObjects (primitives supported) |
-| `unity_delete_gameobject` | Delete GameObjects from scene |
-| `unity_set_transform` | Set position, rotation, scale |
-| `unity_add_component` | Add components to GameObjects |
-| `unity_remove_component` | Remove components |
-| `unity_set_component_property` | Set component property values |
+### 물리
+| 도구 | 설명 |
+|------|------|
+| `unity_raycast` | 레이캐스트 + 히트 정보 |
+| `unity_overlap_sphere` | 반경 내 콜라이더 탐색 |
+| `unity_add_force` | Rigidbody에 힘 적용 |
 
-### Hierarchy Tools
-| Tool | Description |
-|------|-------------|
-| `unity_get_hierarchy` | Get scene GameObject hierarchy |
-| `unity_get_gameobject` | Get details of a specific GameObject |
-| `unity_get_components` | List components on a GameObject |
+### 에셋 생성
+| 도구 | 설명 |
+|------|------|
+| `unity_create_folder` | 프로젝트 폴더 생성 |
+| `unity_create_material` | 머티리얼 에셋 생성 |
+| `unity_create_script` | 템플릿 기반 C# 스크립트 생성 |
+| `unity_move_asset` | 에셋 이동/이름 변경 |
+| `unity_duplicate_asset` | 에셋 복제 |
 
-### Prefab Tools
-| Tool | Description |
-|------|-------------|
-| `unity_instantiate_prefab` | Instantiate prefabs in scene |
-| `unity_get_prefab_info` | Get prefab structure |
-| `unity_create_prefab` | Create prefab from GameObject |
-| `unity_unpack_prefab` | Unpack prefab instances |
+### AI 컨텍스트
+| 도구 | 설명 |
+|------|------|
+| `unity_get_scene_summary` | AI용 압축 씬 개요 |
+| `unity_get_component_schema` | 컴포넌트 속성 스키마 |
+| `unity_get_type_info` | Unity 컴포넌트 타입 탐색 |
 
-### Scene Tools
-| Tool | Description |
-|------|-------------|
-| `unity_get_scenes` | List all scenes in project |
-| `unity_open_scene` | Open a scene |
-| `unity_save_scene` | Save current scene |
-| `unity_new_scene` | Create new scene |
-| `unity_close_scene` | Close a scene |
-| `unity_set_active_scene` | Set active scene |
+## MCP 리소스
 
-### Asset & Editor Tools
-| Tool | Description |
-|------|-------------|
-| `unity_get_assets` | List assets in a folder |
-| `unity_get_project_settings` | Get project configuration |
-| `unity_get_console_logs` | Get recent console logs |
-| `unity_clear_console` | Clear the console |
-| `unity_execute_menu` | Execute a menu item |
-| `unity_select_object` | Select a GameObject |
-| `unity_get_selection` | Get current selection |
-| `unity_get_editor_state` | Get editor play/pause state |
+MCP 리소스 프로토콜로도 접근 가능합니다:
+- **Scripts** — C# 소스 읽기
+- **Scenes** — 씬 메타데이터
+- **Prefabs** — 프리팹 구조
+- **ScriptableObjects** — SO 데이터를 JSON으로
 
-### Compilation Tools
-| Tool | Description |
-|------|-------------|
-| `unity_get_compilation_status` | Get compile errors/warnings |
-| `unity_recompile_scripts` | Force recompilation |
-| `unity_get_assemblies` | List project assemblies |
+## MCP 클라이언트 설정
 
-### Screenshot & Search Tools (v2.1)
-| Tool | Description |
-|------|-------------|
-| `unity_take_screenshot` | Capture Game View or Scene View as base64 PNG |
-| `unity_search_project` | Search by name, content, or asset references |
-
-### Play Mode & Input Tools (v2.1)
-| Tool | Description |
-|------|-------------|
-| `unity_enter_play_mode` | Enter play mode |
-| `unity_exit_play_mode` | Exit play mode |
-| `unity_pause_play_mode` | Pause/unpause play mode |
-| `unity_simulate_key` | Simulate keyboard input |
-| `unity_simulate_mouse` | Simulate mouse clicks |
-| `unity_click_ui_element` | Click UI buttons/toggles by name |
-
-### Animation Tools (v2.2)
-| Tool | Description |
-|------|-------------|
-| `unity_set_animator_parameter` | Set bool/float/int/trigger parameters |
-| `unity_get_animator_info` | Get animator state, parameters, layers |
-| `unity_play_animation` | Play animation state by name |
-
-### Material & Shader Tools (v2.2)
-| Tool | Description |
-|------|-------------|
-| `unity_get_material_info` | Get material properties and shader |
-| `unity_set_material_property` | Set color/float/int/vector properties |
-| `unity_set_material` | Assign material to renderer |
-
-### Physics Tools (v2.2)
-| Tool | Description |
-|------|-------------|
-| `unity_raycast` | Cast ray and get hit info |
-| `unity_overlap_sphere` | Find colliders in radius |
-| `unity_add_force` | Apply force to Rigidbody |
-
-### Asset Creation Tools (v2.2)
-| Tool | Description |
-|------|-------------|
-| `unity_create_folder` | Create project folders |
-| `unity_create_material` | Create material assets |
-| `unity_create_script` | Create C# scripts with templates |
-| `unity_move_asset` | Move/rename assets |
-| `unity_duplicate_asset` | Duplicate assets |
-
-### AI Context Tools (v2.2)
-| Tool | Description |
-|------|-------------|
-| `unity_get_scene_summary` | Compact scene overview for AI |
-| `unity_get_component_schema` | Get component properties schema |
-| `unity_get_type_info` | Discover Unity component types |
-
-## MCP Resources
-
-The server also provides resource access via MCP resources protocol:
-- **Scripts** - Read C# source files
-- **Scenes** - Get scene metadata
-- **Prefabs** - Read prefab structure
-- **ScriptableObjects** - Read SO data as JSON
-
-## MCP Client Configuration
-
-Add to your MCP client config (e.g., `mcp_config.json`):
-
+클라이언트 설정(예: `mcp_config.json` 또는 `.mcp.json`)에 추가:
 ```json
 {
   "mcpServers": {
     "unity": {
       "command": "node",
-      "args": ["path/to/Packages/com.community.unity-mcp/Bridge/mcp-bridge.js"]
+      "args": ["여기에/Packages/com.community.unity-mcp/Bridge/mcp-bridge.js"]
     }
   }
 }
 ```
 
-> **Note**: Use the "Copy Config to Clipboard" button in `Window > MCP Server` to get the correct path.
+> **팁**: `Window > MCP Server`의 "Copy Config to Clipboard" 버튼을 쓰면 올바른 경로가 자동으로 들어갑니다.
+> **주의**: 패키지를 업데이트하거나 이동하면 위 경로가 바뀔 수 있으니, MCP 연결이 끊기면 이 경로부터 확인하세요.
 
-## Example Queries
+## 예시 명령
 
-Once connected, ask your AI assistant:
-- "Create a red cube at position (0, 2, 0)"
-- "Add a Rigidbody to the Player object"
-- "What GameObjects are in my current scene?"
-- "Show me the components on the Player object"
-- "Open the MainMenu scene"
-- "What compilation errors do I have?"
+연결 후 AI에게:
+- "(0, 2, 0)에 빨간 큐브 만들어줘"
+- "Player 오브젝트에 Rigidbody 붙여줘"
+- "지금 씬에 어떤 게임오브젝트들 있어?"
+- "Player의 컴포넌트 보여줘"
+- "MainMenu 씬 열어줘"
+- "지금 컴파일 에러 있어?"
 
-## Requirements
+## 요구 사항
 
-- Unity 2021.3 or later
-- Node.js (for the MCP bridge)
+- Unity 2021.3 이상
+- Node.js (MCP 브릿지 실행용)
 
-## Related Packages
+## 라이선스
 
-- [Antigravity IDE Support](https://github.com/usmanbutt-dev/antigravity-unity) - IDE integration for Unity
-
-## License
-
-MIT License - see [LICENSE](LICENSE)
+MIT License — [LICENSE](LICENSE) 참조. 원본: [usmanbutt-dev/unity-mcp](https://github.com/usmanbutt-dev/unity-mcp)
