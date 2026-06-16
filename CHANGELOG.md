@@ -2,6 +2,22 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.2.2] - 2026-06-16
+
+### Changed
+- **문서(README)**: 안정적 MCP 연결 설정 안내 추가. Git URL 설치 시 `Library/PackageCache/...@<해시>` 경로가 갱신마다 바뀌어 연결이 끊기는 함정을 경고하고, 권장 설정을 재정리(임베드 + 프로젝트 `.mcp.json`, 또는 공유 브릿지 + 전역 등록). 설치에 임베드(방법 2) 추가, 도구 수 52 → 55 정정.
+
+---
+
+## [2.2.1] - 2026-06-13
+
+### Changed
+- **토큰 절감**: 도구 응답 compact JSON, `resources/list` 50개·`unity_get_assets` 30개 상한, `unity_get_hierarchy` depth 2 + 루트 50개 + 전체 노드 300개 상한, guid/description/tag/layer 등 불필요 필드 제거 (조회당 약 60~90% 절감).
+- **스레딩 안정화**(`McpServer.cs`): 도메인 리로드(재컴파일) 직전 서버 정상 종료, 메인스레드 큐 락 밖 실행, 컴파일 중 즉시 busy 응답, 리스너 무한 스핀 방지.
+- **브릿지 견고화**(`mcp-bridge.js`): 모든 실패에 JSON-RPC 에러 응답 반환(클라 무한 대기 방지), 요청 타임아웃 + 연결거부 재시도.
+
+---
+
 ## [2.2.0] - 2024-12-12
 
 ### Added
