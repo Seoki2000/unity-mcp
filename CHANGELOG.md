@@ -2,6 +2,13 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.2.3] - 2026-06-16
+
+### Changed
+- **문서(README)**: "설치 → 사용 한 번에" 통합 퀵스타트 섹션 추가 — 설치·브릿지 개념·`.mcp.json`·연결·주의사항을 6단계로 정리. 흩어져 있던 설치 / 빠른 시작 / MCP 클라이언트 설정 / 예시 명령 / 요구 사항 섹션을 이 하나로 통합. 에디터↔브릿지 포트 독립성, `UNITY_MCP_HOST`, 로컬 CORS(`Access-Control-Allow-Origin: *` + 무인증) 보안 주의를 명시.
+
+---
+
 ## [2.2.2] - 2026-06-16
 
 ### Changed

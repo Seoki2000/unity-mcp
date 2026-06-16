@@ -1,6 +1,6 @@
 {
   "name": "com.community.unity-mcp",
-  "version": "2.2.2",
+  "version": "2.2.3",
   "displayName": "Unity MCP Server (Optimized Fork)",
   "description": "Model Context Protocol (MCP) server for Unity. Optimized fork: reduced token usage (compact JSON, capped responses) and editor-reload threading fixes. Forked from usmanbutt-dev/unity-mcp.",
   "unity": "2021.3",
