@@ -1,7 +1,9 @@
 {
     "name": "Community.Unity.MCP.Editor",
     "rootNamespace": "Community.Unity.MCP",
-    "references": [],
+    "references": [
+        "Unity.InputSystem"
+    ],
     "includePlatforms": [
         "Editor"
     ],
