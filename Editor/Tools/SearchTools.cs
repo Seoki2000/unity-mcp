@@ -20,7 +20,7 @@ namespace Community.Unity.MCP
             
             if (string.IsNullOrEmpty(args?.query))
             {
-                return new { error = "query parameter is required" };
+                return new McpToolError { error = "query parameter is required" };
             }
             
             var results = new List<SearchResult>();
@@ -42,7 +42,7 @@ namespace Community.Unity.MCP
                     SearchByReference(args.query, results, maxResults);
                     break;
                 default:
-                    return new { error = $"Unknown search type: {searchType}. Valid types: name, content, reference" };
+                    return new McpToolError { error = $"Unknown search type: {searchType}. Valid types: name, content, reference" };
             }
             
             return new SearchProjectResult

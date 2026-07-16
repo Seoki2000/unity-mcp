@@ -17,7 +17,7 @@ namespace Community.Unity.MCP
             var args = JsonUtility.FromJson<CreateFolderArgs>(argsJson);
             
             if (string.IsNullOrEmpty(args?.path))
-                return new { error = "path parameter is required (e.g., 'Assets/NewFolder')" };
+                return new McpToolError { error = "path parameter is required (e.g., 'Assets/NewFolder')" };
             
             // Ensure path starts with Assets
             string path = args.path;
@@ -26,7 +26,7 @@ namespace Community.Unity.MCP
             
             // Check if already exists
             if (AssetDatabase.IsValidFolder(path))
-                return new { error = $"Folder already exists: {path}", exists = true };
+                return new FolderExistsError { error = $"Folder already exists: {path}", exists = true };
             
             // Create folder hierarchy
             string[] parts = path.Split('/');
@@ -58,7 +58,7 @@ namespace Community.Unity.MCP
             var args = JsonUtility.FromJson<CreateMaterialArgs>(argsJson);
             
             if (string.IsNullOrEmpty(args?.path))
-                return new { error = "path parameter is required (e.g., 'Assets/Materials/NewMaterial.mat')" };
+                return new McpToolError { error = "path parameter is required (e.g., 'Assets/Materials/NewMaterial.mat')" };
             
             string path = args.path;
             if (!path.StartsWith("Assets"))
@@ -77,7 +77,7 @@ namespace Community.Unity.MCP
             // Find shader
             Shader shader = Shader.Find(string.IsNullOrEmpty(args.shaderName) ? "Standard" : args.shaderName);
             if (shader == null)
-                return new { error = $"Shader not found: {args.shaderName}" };
+                return new McpToolError { error = $"Shader not found: {args.shaderName}" };
             
             Material material = new Material(shader);
             material.name = Path.GetFileNameWithoutExtension(path);
@@ -107,7 +107,7 @@ namespace Community.Unity.MCP
             var args = JsonUtility.FromJson<CreateScriptArgs>(argsJson);
             
             if (string.IsNullOrEmpty(args?.path))
-                return new { error = "path parameter is required (e.g., 'Assets/Scripts/NewScript.cs')" };
+                return new McpToolError { error = "path parameter is required (e.g., 'Assets/Scripts/NewScript.cs')" };
             
             string path = args.path;
             if (!path.StartsWith("Assets"))
@@ -152,14 +152,14 @@ namespace Community.Unity.MCP
             var args = JsonUtility.FromJson<MoveAssetArgs>(argsJson);
             
             if (string.IsNullOrEmpty(args?.sourcePath))
-                return new { error = "sourcePath parameter is required" };
+                return new McpToolError { error = "sourcePath parameter is required" };
             if (string.IsNullOrEmpty(args?.destinationPath))
-                return new { error = "destinationPath parameter is required" };
+                return new McpToolError { error = "destinationPath parameter is required" };
             
             if (!File.Exists(Path.Combine(Application.dataPath.Replace("/Assets", ""), args.sourcePath)) &&
                 !AssetDatabase.IsValidFolder(args.sourcePath))
             {
-                return new { error = $"Source not found: {args.sourcePath}" };
+                return new McpToolError { error = $"Source not found: {args.sourcePath}" };
             }
             
             // Ensure destination directory exists
@@ -173,7 +173,7 @@ namespace Community.Unity.MCP
             
             if (!string.IsNullOrEmpty(result))
             {
-                return new { error = result };
+                return new McpToolError { error = result };
             }
             
             AssetDatabase.Refresh();
@@ -193,7 +193,7 @@ namespace Community.Unity.MCP
             var args = JsonUtility.FromJson<DuplicateAssetArgs>(argsJson);
             
             if (string.IsNullOrEmpty(args?.sourcePath))
-                return new { error = "sourcePath parameter is required" };
+                return new McpToolError { error = "sourcePath parameter is required" };
             
             string destPath = args.destinationPath;
             if (string.IsNullOrEmpty(destPath))
@@ -209,7 +209,7 @@ namespace Community.Unity.MCP
             
             if (!success)
             {
-                return new { error = $"Failed to duplicate: {args.sourcePath}" };
+                return new McpToolError { error = $"Failed to duplicate: {args.sourcePath}" };
             }
             
             AssetDatabase.Refresh();
@@ -321,6 +321,12 @@ public class {className}
             public bool success;
             public string path;
             public string guid;
+        }
+
+        [Serializable]
+        public class FolderExistsError : McpToolError
+        {
+            public bool exists;
         }
 
         [Serializable]

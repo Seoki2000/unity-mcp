@@ -152,7 +152,8 @@ namespace Community.Unity.MCP
                 {
                     if (GUILayout.Button("Stop Server", GUILayout.Height(30)))
                     {
-                        McpServer.Instance.Stop();
+                        // 사용자가 명시적으로 정지 — 자동 재시작 억제 플래그를 세운다.
+                        McpServer.Instance.StopUser();
                     }
                 }
             }

@@ -17,17 +17,17 @@ namespace Community.Unity.MCP
             var args = JsonUtility.FromJson<SetAnimatorParameterArgs>(argsJson);
             
             if (string.IsNullOrEmpty(args?.path))
-                return new { error = "path parameter is required" };
+                return new McpToolError { error = "path parameter is required" };
             if (string.IsNullOrEmpty(args?.parameterName))
-                return new { error = "parameterName parameter is required" };
+                return new McpToolError { error = "parameterName parameter is required" };
             
             var go = GameObject.Find(args.path);
             if (go == null)
-                return new { error = $"GameObject not found: {args.path}" };
+                return new McpToolError { error = $"GameObject not found: {args.path}" };
             
             var animator = go.GetComponent<Animator>();
             if (animator == null)
-                return new { error = $"No Animator component on: {args.path}" };
+                return new McpToolError { error = $"No Animator component on: {args.path}" };
             
             string paramType = string.IsNullOrEmpty(args.parameterType) ? "trigger" : args.parameterType.ToLower();
             
@@ -49,7 +49,7 @@ namespace Community.Unity.MCP
                         animator.SetTrigger(args.parameterName);
                         break;
                     default:
-                        return new { error = $"Unknown parameter type: {paramType}. Use: bool, int, float, trigger" };
+                        return new McpToolError { error = $"Unknown parameter type: {paramType}. Use: bool, int, float, trigger" };
                 }
                 
                 return new SetAnimatorParameterResult
@@ -62,7 +62,7 @@ namespace Community.Unity.MCP
             }
             catch (Exception ex)
             {
-                return new { error = $"Failed to set parameter: {ex.Message}" };
+                return new McpToolError { error = $"Failed to set parameter: {ex.Message}" };
             }
         }
 
@@ -72,15 +72,15 @@ namespace Community.Unity.MCP
             var args = JsonUtility.FromJson<GetAnimatorInfoArgs>(argsJson);
             
             if (string.IsNullOrEmpty(args?.path))
-                return new { error = "path parameter is required" };
+                return new McpToolError { error = "path parameter is required" };
             
             var go = GameObject.Find(args.path);
             if (go == null)
-                return new { error = $"GameObject not found: {args.path}" };
+                return new McpToolError { error = $"GameObject not found: {args.path}" };
             
             var animator = go.GetComponent<Animator>();
             if (animator == null)
-                return new { error = $"No Animator component on: {args.path}" };
+                return new McpToolError { error = $"No Animator component on: {args.path}" };
             
             // Get parameters
             var parameters = new List<AnimatorParameterInfo>();
@@ -145,17 +145,17 @@ namespace Community.Unity.MCP
             var args = JsonUtility.FromJson<PlayAnimationArgs>(argsJson);
             
             if (string.IsNullOrEmpty(args?.path))
-                return new { error = "path parameter is required" };
+                return new McpToolError { error = "path parameter is required" };
             if (string.IsNullOrEmpty(args?.stateName))
-                return new { error = "stateName parameter is required" };
+                return new McpToolError { error = "stateName parameter is required" };
             
             var go = GameObject.Find(args.path);
             if (go == null)
-                return new { error = $"GameObject not found: {args.path}" };
+                return new McpToolError { error = $"GameObject not found: {args.path}" };
             
             var animator = go.GetComponent<Animator>();
             if (animator == null)
-                return new { error = $"No Animator component on: {args.path}" };
+                return new McpToolError { error = $"No Animator component on: {args.path}" };
             
             int layer = args.layer >= 0 ? args.layer : 0;
             float normalizedTime = args.normalizedTime >= 0 ? args.normalizedTime : 0f;
@@ -175,7 +175,7 @@ namespace Community.Unity.MCP
             }
             catch (Exception ex)
             {
-                return new { error = $"Failed to play animation: {ex.Message}" };
+                return new McpToolError { error = $"Failed to play animation: {ex.Message}" };
             }
         }
 

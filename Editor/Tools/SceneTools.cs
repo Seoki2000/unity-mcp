@@ -65,20 +65,20 @@ namespace Community.Unity.MCP
             
             if (string.IsNullOrEmpty(args?.scenePath))
             {
-                return new { error = "scenePath parameter is required" };
+                return new McpToolError { error = "scenePath parameter is required" };
             }
             
             // Check if scene exists
             var sceneAsset = AssetDatabase.LoadAssetAtPath<SceneAsset>(args.scenePath);
             if (sceneAsset == null)
             {
-                return new { error = $"Scene not found: {args.scenePath}" };
+                return new McpToolError { error = $"Scene not found: {args.scenePath}" };
             }
             
             // Prompt to save if there are unsaved changes
             if (!EditorSceneManager.SaveCurrentModifiedScenesIfUserWantsTo())
             {
-                return new { error = "Operation cancelled by user" };
+                return new McpToolError { error = "Operation cancelled by user" };
             }
             
             OpenSceneMode mode = args.additive 
@@ -110,7 +110,7 @@ namespace Community.Unity.MCP
                 sceneToSave = SceneManager.GetSceneByPath(args.scenePath);
                 if (!sceneToSave.IsValid())
                 {
-                    return new { error = $"Scene not loaded: {args.scenePath}" };
+                    return new McpToolError { error = $"Scene not loaded: {args.scenePath}" };
                 }
             }
             else
@@ -148,7 +148,7 @@ namespace Community.Unity.MCP
             // Prompt to save if there are unsaved changes
             if (!EditorSceneManager.SaveCurrentModifiedScenesIfUserWantsTo())
             {
-                return new { error = "Operation cancelled by user" };
+                return new McpToolError { error = "Operation cancelled by user" };
             }
             
             NewSceneSetup setup = args?.addDefaultGameObjects == true 
@@ -183,18 +183,18 @@ namespace Community.Unity.MCP
             
             if (string.IsNullOrEmpty(args?.scenePath))
             {
-                return new { error = "scenePath parameter is required" };
+                return new McpToolError { error = "scenePath parameter is required" };
             }
             
             var scene = SceneManager.GetSceneByPath(args.scenePath);
             if (!scene.IsValid())
             {
-                return new { error = $"Scene not loaded: {args.scenePath}" };
+                return new McpToolError { error = $"Scene not loaded: {args.scenePath}" };
             }
             
             if (SceneManager.sceneCount <= 1)
             {
-                return new { error = "Cannot close the only loaded scene" };
+                return new McpToolError { error = "Cannot close the only loaded scene" };
             }
             
             bool removeScene = args.removeScene;
@@ -215,13 +215,13 @@ namespace Community.Unity.MCP
             
             if (string.IsNullOrEmpty(args?.scenePath))
             {
-                return new { error = "scenePath parameter is required" };
+                return new McpToolError { error = "scenePath parameter is required" };
             }
             
             var scene = SceneManager.GetSceneByPath(args.scenePath);
             if (!scene.IsValid())
             {
-                return new { error = $"Scene not loaded: {args.scenePath}" };
+                return new McpToolError { error = $"Scene not loaded: {args.scenePath}" };
             }
             
             bool success = SceneManager.SetActiveScene(scene);

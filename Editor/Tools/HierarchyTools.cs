@@ -55,13 +55,13 @@ namespace Community.Unity.MCP
             
             if (string.IsNullOrEmpty(args?.path))
             {
-                return new { error = "path parameter is required" };
+                return new McpToolError { error = "path parameter is required" };
             }
 
             var go = GameObject.Find(args.path);
             if (go == null)
             {
-                return new { error = $"GameObject not found: {args.path}" };
+                return new McpToolError { error = $"GameObject not found: {args.path}" };
             }
 
             return BuildDetailedGameObjectInfo(go);
@@ -74,13 +74,13 @@ namespace Community.Unity.MCP
             
             if (string.IsNullOrEmpty(args?.path))
             {
-                return new { error = "path parameter is required" };
+                return new McpToolError { error = "path parameter is required" };
             }
 
             var go = GameObject.Find(args.path);
             if (go == null)
             {
-                return new { error = $"GameObject not found: {args.path}" };
+                return new McpToolError { error = $"GameObject not found: {args.path}" };
             }
 
             var components = go.GetComponents<Component>();

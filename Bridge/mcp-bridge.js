@@ -96,10 +96,18 @@ rl.on('line', (line) => {
     }
 
     const requestId = parsedLine ? parsedLine.id : undefined;
-    postToUnity(line, requestId, MAX_RETRIES);
+    postToUnity(line, requestId, MAX_RETRIES, parsedLine);
 });
 
-function postToUnity(line, requestId, retriesLeft) {
+// 재시도해도 안전한(부작용 없는/조회성) 도구 이름 프리픽스.
+const IDEMPOTENT_TOOL_PREFIXES = ['unity_get_', 'unity_list', 'unity_search', 'unity_raycast', 'unity_overlap', 'unity_take_screenshot'];
+
+function isIdempotentTool(toolName) {
+    if (!toolName) return false;
+    return IDEMPOTENT_TOOL_PREFIXES.some(prefix => toolName.startsWith(prefix));
+}
+
+function postToUnity(line, requestId, retriesLeft, parsedLine) {
     let settled = false; // 응답/에러를 정확히 1번만 처리
 
     const req = http.request({
@@ -153,11 +161,33 @@ function postToUnity(line, requestId, retriesLeft) {
         if (settled) return;
         settled = true;
 
-        // 연결 자체가 실패(서버 미기동/리로드 중) = 서버에 안 닿았으므로 재시도해도 안전
-        const retriable = e.code === 'ECONNREFUSED' || e.code === 'ECONNRESET' || e.code === 'EPIPE';
+        const method = parsedLine && parsedLine.method;
+        const toolName = method === 'tools/call' && parsedLine.params ? parsedLine.params.name : undefined;
+
+        // ECONNREFUSED = 연결 자체가 실패(서버 미기동/리로드 중) = 요청이 Unity에 닿지 않았으므로 항상 재시도해도 안전.
+        // ECONNRESET/EPIPE = 연결이 맺어진 뒤 끊긴 것이라 요청이 이미 Unity에 도달했을 수 있다.
+        //   tools/call이 아니면(initialize/tools list/ping 등 부작용 없음) 재시도.
+        //   tools/call이면 조회성 프리픽스(unity_get_ 등)로 시작하는 멱등 도구일 때만 재시도 —
+        //   그 외는 이미 실행됐을 수 있어 재시도 시 중복 실행 위험이 있으므로 재시도하지 않는다.
+        let retriable;
+        if (e.code === 'ECONNREFUSED') {
+            retriable = true;
+        } else if (e.code === 'ECONNRESET' || e.code === 'EPIPE') {
+            retriable = method !== 'tools/call' || isIdempotentTool(toolName);
+        } else {
+            retriable = false;
+        }
+
         if (retriable && retriesLeft > 0) {
             log(`Unity unreachable (${e.code}), retrying in ${RETRY_DELAY_MS}ms... (${retriesLeft} left)`);
-            setTimeout(() => postToUnity(line, requestId, retriesLeft - 1), RETRY_DELAY_MS);
+            setTimeout(() => postToUnity(line, requestId, retriesLeft - 1, parsedLine), RETRY_DELAY_MS);
+            return;
+        }
+
+        if (!retriable && (e.code === 'ECONNRESET' || e.code === 'EPIPE')) {
+            log(`Not retrying ${e.code} for tool '${toolName}' — request may have already reached Unity.`);
+            sendErrorResponse(requestId, -32000,
+                `Connection lost after request may have reached Unity — not retried to avoid duplicate side effects (tool: ${toolName}). Verify state and retry manually if safe.`);
             return;
         }
 

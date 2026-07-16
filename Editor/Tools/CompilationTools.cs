@@ -101,7 +101,7 @@ namespace Community.Unity.MCP
         {
             if (EditorApplication.isCompiling)
             {
-                return new { error = "Compilation is already in progress" };
+                return new McpToolError { error = "Compilation is already in progress" };
             }
             
             CompilationPipeline.RequestScriptCompilation();

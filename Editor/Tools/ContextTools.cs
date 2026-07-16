@@ -55,12 +55,12 @@ namespace Community.Unity.MCP
             var args = JsonUtility.FromJson<GetComponentSchemaArgs>(argsJson);
             
             if (string.IsNullOrEmpty(args?.componentType))
-                return new { error = "componentType parameter is required" };
+                return new McpToolError { error = "componentType parameter is required" };
             
             // Find the type
             Type type = FindType(args.componentType);
             if (type == null)
-                return new { error = $"Type not found: {args.componentType}" };
+                return new McpToolError { error = $"Type not found: {args.componentType}" };
             
             var properties = new List<PropertySchema>();
             
@@ -144,7 +144,7 @@ namespace Community.Unity.MCP
                     types.AddRange(GetAllComponentTypes(searchQuery, maxResults));
                     break;
                 default:
-                    return new { error = $"Unknown category: {category}. Use: common, physics, rendering, ui, audio, all, search" };
+                    return new McpToolError { error = $"Unknown category: {category}. Use: common, physics, rendering, ui, audio, all, search" };
             }
             
             // Apply search filter

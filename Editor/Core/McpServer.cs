@@ -5,6 +5,7 @@ using System.IO;
 using System.Net;
 using System.Text;
 using System.Threading;
+using System.Threading.Tasks;
 using UnityEditor;
 using UnityEngine;
 
@@ -28,6 +29,24 @@ namespace Community.Unity.MCP
         private static readonly ManualResetEvent _shutdownEvent = new ManualResetEvent(false);
         // 메인 스레드 하트비트 — 컴파일/리로드로 update가 안 돌면 요청을 즉시 busy 처리.
         private static volatile int _lastMainThreadPump = Environment.TickCount;
+
+        // Start() 실패 시 지수 백오프 재시도 상태.
+        private int _startRetryCount;
+        private bool _retryPending;
+        private int _retryPort;
+        private double _nextRetryTime;
+        private bool _userStopped; // 사용자가 창에서 명시적으로 Stop — 자동 재시도 억제
+        private static readonly double[] _startRetryDelaysSec = { 0.25, 0.5, 1, 2, 4, 5, 5, 5, 5, 5 };
+        private const int MaxStartRetries = 10;
+
+        /// <summary>
+        /// 요청 1건의 생존 상태. 타임아웃/셧다운으로 워커가 대기를 포기하면 Abandoned를 세워
+        /// 큐에 남아있던 액션이 뒤늦게 실행되며 부작용을 내는 것을 막는다.
+        /// </summary>
+        private sealed class PendingRequestContext
+        {
+            public volatile bool Abandoned;
+        }
 
         public static McpServer Instance => _instance ??= new McpServer();
 
@@ -55,10 +74,20 @@ namespace Community.Unity.MCP
         [InitializeOnLoadMethod]
         private static void AutoStart()
         {
+            if (Application.isBatchMode) return; // CI/배치 모드에서는 서버를 띄우지 않는다.
+
+            // MPPM 가상 플레이어는 서버를 띄우지 않는다 — 메인 에디터가 MCP를 호스트한다.
+            if (Application.dataPath.Replace('\\', '/').Contains("/Library/VP/"))
+            {
+                Debug.Log("[MCP] MPPM virtual player detected — server start skipped (main editor hosts MCP)");
+                return;
+            }
+
             EditorApplication.delayCall += () =>
             {
                 if (!Instance.IsRunning)
                 {
+                    Instance._userStopped = false; // AutoStart 경로 — 이전 정지 플래그 해제
                     int port = EditorPrefs.GetInt("MCP_Port", 3000);
                     Instance.Start(port);
                 }
@@ -76,6 +105,10 @@ namespace Community.Unity.MCP
                 return;
             }
 
+            // 대기 중이던 백오프 재시도가 있다면 이 즉시 시도로 대체한다.
+            _retryPending = false;
+            EditorApplication.update -= CheckStartRetry;
+
             Port = port;
             _shutdownEvent.Reset();
 
@@ -86,6 +119,7 @@ namespace Community.Unity.MCP
                 _listener.Start();
 
                 _isRunning = true;
+                _startRetryCount = 0; // 성공 — 재시도 카운터 리셋
                 _listenerThread = new Thread(ListenLoop) { IsBackground = true };
                 _listenerThread.Start();
 
@@ -96,7 +130,55 @@ namespace Community.Unity.MCP
             {
                 Debug.LogError($"[MCP] Failed to start server: {ex.Message}");
                 _isRunning = false;
+                ScheduleStartRetry(port);
             }
+        }
+
+        /// <summary>
+        /// Start() 실패 시 지수 백오프로 재시도를 예약한다 (0.25→0.5→1→2→4→5...초, 최대 MaxStartRetries회).
+        /// </summary>
+        private void ScheduleStartRetry(int port)
+        {
+            if (_userStopped) return; // 사용자가 명시적으로 정지 — 자동 재시도 안 함
+            if (_startRetryCount >= MaxStartRetries) return;
+
+            double delay = _startRetryDelaysSec[Math.Min(_startRetryCount, _startRetryDelaysSec.Length - 1)];
+            _startRetryCount++;
+            _retryPort = port;
+            _nextRetryTime = EditorApplication.timeSinceStartup + delay;
+            _retryPending = true;
+
+            Debug.Log($"[MCP] Start retry {_startRetryCount}/{MaxStartRetries} in {delay}s (port busy?)");
+
+            // 도메인 리로드 후에도 재등록되도록 update 콜백으로 경과 시간을 폴링한다(중복 구독 방지를 위해 먼저 해제 후 등록).
+            EditorApplication.update -= CheckStartRetry;
+            EditorApplication.update += CheckStartRetry;
+        }
+
+        private void CheckStartRetry()
+        {
+            if (!_retryPending || _isRunning || _userStopped)
+            {
+                _retryPending = false;
+                EditorApplication.update -= CheckStartRetry;
+                return;
+            }
+
+            if (EditorApplication.timeSinceStartup >= _nextRetryTime)
+            {
+                _retryPending = false;
+                EditorApplication.update -= CheckStartRetry;
+                Start(_retryPort);
+            }
+        }
+
+        /// <summary>
+        /// 사용자가 McpServerWindow에서 명시적으로 정지시킬 때 호출 — 이후 자동 재시작을 막는다.
+        /// </summary>
+        public void StopUser()
+        {
+            _userStopped = true;
+            Stop();
         }
 
         /// <summary>
@@ -104,6 +186,10 @@ namespace Community.Unity.MCP
         /// </summary>
         public void Stop()
         {
+            // 대기 중이던 백오프 재시도가 있으면 서버 실행 여부와 무관하게 취소한다.
+            _retryPending = false;
+            EditorApplication.update -= CheckStartRetry;
+
             if (!_isRunning) return;
 
             _isRunning = false;
@@ -276,9 +362,29 @@ namespace Community.Unity.MCP
             var response = context.Response;
 
             string requestBody;
-            using (var reader = new StreamReader(request.InputStream, request.ContentEncoding))
+            try
             {
-                requestBody = reader.ReadToEnd();
+                // ReadToEnd()가 느리거나 불완전한 요청에서 워커를 무한정 막지 않도록 5초 상한을 둔다.
+                var readTask = Task.Run(() =>
+                {
+                    using (var reader = new StreamReader(request.InputStream, request.ContentEncoding))
+                    {
+                        return reader.ReadToEnd();
+                    }
+                });
+
+                if (!readTask.Wait(5000))
+                {
+                    WriteJsonResponse(response, JsonRpcHandler.CreateErrorResponse(null, -32600, "Request body read timeout"));
+                    return;
+                }
+
+                requestBody = readTask.Result;
+            }
+            catch (Exception ex)
+            {
+                WriteJsonResponse(response, JsonRpcHandler.CreateErrorResponse(null, -32600, $"Request body read error: {ex.Message}"));
+                return;
             }
 
             string responseBody = null;
@@ -292,9 +398,18 @@ namespace Community.Unity.MCP
             else
             {
                 var waitHandle = new ManualResetEvent(false);
+                var ctx = new PendingRequestContext();
 
                 EnqueueMainThread(() =>
                 {
+                    if (ctx.Abandoned)
+                    {
+                        // 타임아웃/셧다운으로 이미 포기된 요청 — 지금 실행하면 호출자가 모르는 부작용만 남긴다.
+                        waitHandle.Set();
+                        Debug.LogWarning("[MCP] Skipping abandoned request action");
+                        return;
+                    }
+
                     try
                     {
                         responseBody = JsonRpcHandler.ProcessRequest(requestBody);
@@ -313,17 +428,25 @@ namespace Community.Unity.MCP
                 int signaled = WaitHandle.WaitAny(new WaitHandle[] { waitHandle, _shutdownEvent }, 30000);
                 if (signaled == 1)
                 {
+                    ctx.Abandoned = true; // 큐에 아직 남아있다면 나중에 실행되지 않게 표시(에러 응답 생성 전에 세운다)
                     responseBody = JsonRpcHandler.CreateErrorResponse(null, -32001,
                         "Server stopping (domain reload) - retry shortly");
                 }
                 else if (signaled == WaitHandle.WaitTimeout)
                 {
+                    ctx.Abandoned = true;
                     responseBody = JsonRpcHandler.CreateErrorResponse(null, -32603, "Request timeout");
                 }
             }
 
-            // Send response direct in POST reply — 어떤 경우에도 응답을 닫아
-            // 클라이언트가 매달리지 않게 한다.
+            WriteJsonResponse(response, responseBody);
+        }
+
+        /// <summary>
+        /// 어떤 경우에도 응답을 닫아 클라이언트가 매달리지 않게 한다.
+        /// </summary>
+        private void WriteJsonResponse(HttpListenerResponse response, string responseBody)
+        {
             try
             {
                 response.ContentType = "application/json";

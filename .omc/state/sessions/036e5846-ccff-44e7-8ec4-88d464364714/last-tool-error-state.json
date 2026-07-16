@@ -1,0 +1,7 @@
+{
+  "tool_name": "Bash",
+  "tool_input_preview": "{\"command\":\"ls -la \\\"C:\\\\Users\\\\user\\\\.unity-mcp\\\\\\\" 2>&1\\necho \\\"---\\\"\\nfind \\\"C:\\\\Users\\\\user\\\\.unity-mcp\\\" -maxdepth 2 -type f 2>&1\",\"description\":\"List home unity-mcp directory contents for any ac...",
+  "error": "Exit code 2\n/usr/bin/bash: eval: line 8: unexpected EOF while looking for matching `\"'",
+  "timestamp": "2026-07-16T07:50:52.940Z",
+  "retry_count": 2
+}
