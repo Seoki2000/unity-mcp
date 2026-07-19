@@ -8,6 +8,12 @@ const REQUEST_TIMEOUT_MS = 45000;
 const RETRY_DELAY_MS = 1500;
 const MAX_RETRIES = 5;
 
+// 하트비트: 10초 주기로 Unity에 ping을 보내 마지막 정상 응답 시각을 추적한다(에러 메시지 부가정보로만 사용).
+const HEARTBEAT_INTERVAL_MS = 10000;
+const HEARTBEAT_TIMEOUT_MS = 5000;
+let lastAliveAt = null;      // Unity가 마지막으로 정상 응답한 시각(ms). 하트비트/정상 응답에서 갱신.
+let reloadingSince = null;   // Unity가 unity/reloading 노티를 보낸 시각(ms). 내부 상태 마킹용(클라 전달 안 함).
+
 // Enhanced logging to stderr (so it doesn't interfere with stdout JSON-RPC)
 function log(msg) {
     console.error(`[Unity MCP Bridge] ${msg}`);
@@ -17,10 +23,15 @@ function log(msg) {
 // (응답을 안 보내면 MCP 클라이언트가 해당 id를 영원히 기다리며 행이 걸림)
 function sendErrorResponse(id, code, message) {
     if (id === undefined || id === null) return; // notification은 응답 불필요
+    let fullMessage = message;
+    if (lastAliveAt) {
+        const agoSec = Math.round((Date.now() - lastAliveAt) / 1000);
+        fullMessage = `${message} (Unity last responded ${agoSec}s ago)`;
+    }
     console.log(JSON.stringify({
         jsonrpc: '2.0',
         id: id,
-        error: { code: code, message: message }
+        error: { code: code, message: fullMessage }
     }));
 }
 
@@ -130,6 +141,7 @@ function postToUnity(line, requestId, retriesLeft, parsedLine) {
                 log(`Unity returned error ${res.statusCode}: ${data}`);
                 sendErrorResponse(requestId, -32000, `Unity HTTP ${res.statusCode}`);
             } else if (data) {
+                lastAliveAt = Date.now(); // Unity가 정상 응답 — 생존 시각 갱신
                 const normalized = normalizeForMcpClient(data);
                 if (normalized) {
                     console.log(normalized);
@@ -199,6 +211,39 @@ function postToUnity(line, requestId, retriesLeft, parsedLine) {
     req.end();
 }
 
+// 하트비트: postToUnity를 재사용하지 않는 전용 경량 요청으로 Unity 생존을 확인한다.
+// 응답은 절대 stdout으로 내보내지 않는다(stdio JSON-RPC 프로토콜 오염 방지). 성공 시 lastAliveAt만 갱신.
+function heartbeatPing() {
+    const payload = JSON.stringify({ jsonrpc: '2.0', id: '__hb', method: 'ping' });
+    const req = http.request({
+        hostname: UNITY_HOST,
+        port: UNITY_PORT,
+        path: '/message',
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+            'Content-Length': Buffer.byteLength(payload)
+        }
+    }, (res) => {
+        // 본문은 소비만 하고 버린다(stdout 출력 없음).
+        res.on('data', () => {});
+        res.on('end', () => {
+            if (res.statusCode === 200) {
+                lastAliveAt = Date.now();
+            }
+        });
+        res.on('error', () => {});
+    });
+    req.setTimeout(HEARTBEAT_TIMEOUT_MS, () => {
+        try { req.destroy(); } catch (e) {}
+    });
+    req.on('error', () => {
+        // Unity 미응답(리로드/미기동) — lastAliveAt 갱신하지 않음. 조용히 무시.
+    });
+    req.write(payload);
+    req.end();
+}
+
 // 2. Handle SSE from Unity -> Stdout
 function connectSSE() {
     log(`Connecting to Unity at http://${UNITY_HOST}:${UNITY_PORT}/sse`);
@@ -228,6 +273,14 @@ function connectSSE() {
                 if (line.startsWith('data: ')) {
                     const json = line.substring(6).trim();
                     if (json) {
+                        // unity/reloading 노티는 내부 상태만 마킹하고 MCP 클라이언트로는 전달하지 않는다(추가적 알림, 오염 방지).
+                        let parsed = null;
+                        try { parsed = JSON.parse(json); } catch (e) {}
+                        if (parsed && parsed.method === 'unity/reloading') {
+                            reloadingSince = Date.now();
+                            log('Unity signaled domain reload (unity/reloading) — expecting a brief disconnect.');
+                            continue;
+                        }
                         // Forward to MCP client via stdout
                         const normalized = normalizeForMcpClient(json);
                         if (normalized) {
@@ -258,5 +311,9 @@ function connectSSE() {
 
 // Start SSE listener
 connectSSE();
+
+// 하트비트 시작 — 인터벌은 unref()로 이벤트 루프를 붙잡지 않게 한다(stdin 종료 시 브릿지가 자연 종료됨).
+const heartbeatTimer = setInterval(heartbeatPing, HEARTBEAT_INTERVAL_MS);
+if (heartbeatTimer.unref) heartbeatTimer.unref();
 
 log('Bridge started. Waiting for MCP client input...');

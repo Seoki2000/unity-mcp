@@ -170,7 +170,8 @@ namespace Community.Unity.MCP
                 "  \"mcpServers\": {\n" +
                 "    \"unity\": {\n" +
                 "      \"command\": \"node\",\n" +
-                $"      \"args\": [\"{bridgePathEscaped}\"]\n" +
+                $"      \"args\": [\"{bridgePathEscaped}\"],\n" +
+                "      \"timeout\": 120000\n" +
                 "    }\n" +
                 "  }\n" +
                 "}";

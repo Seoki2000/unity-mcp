@@ -102,10 +102,24 @@ namespace Community.Unity.MCP
                 return new McpToolError { error = "Cannot enter play mode while compiling" };
             }
 
-            EditorApplication.isPlaying = true;
+            // 잡 생성 → 즉시 접수 응답. 실제 전환(isPlaying=true)은 응답이 POST로 flush된 다음 틱(delayCall)에서 —
+            // 도메인 리로드가 응답 전에 시작돼 브릿지가 끊기는 것을 피한다.
+            string jobId = McpJobStore.CreateJob("unity_enter_play_mode");
 
-            // 도메인 리로드로 곧 끊기며, 이 시점의 isPlaying은 전환 중일 뿐 확정된 상태가 아니다.
-            // 조기에 true로 단정하지 않고 실제 값을 그대로 보고한다.
+            EditorApplication.delayCall += () =>
+            {
+                try
+                {
+                    McpJobStore.Update(jobId, McpJobStore.StatusRunning, null, null);
+                    if (!EditorApplication.isPlaying) EditorApplication.isPlaying = true;
+                }
+                catch (Exception ex)
+                {
+                    McpJobStore.Update(jobId, McpJobStore.StatusFailed, null, ex.Message);
+                }
+            };
+
+            // 이 시점 isPlaying은 아직 false(전환 전) — 조기에 true로 단정하지 않고 실제 값을 그대로 보고한다.
             return new PlayModeResult
             {
                 success = true,
@@ -114,7 +128,8 @@ namespace Community.Unity.MCP
                 isPaused = false,
                 accepted = true,
                 transition = "starting",
-                note = DomainReloadNote
+                note = DomainReloadNote,
+                jobId = jobId
             };
         }
 
@@ -126,7 +141,21 @@ namespace Community.Unity.MCP
                 return new PlayModeErrorResult { error = "Not in play mode", isPlaying = false };
             }
 
-            EditorApplication.isPlaying = false;
+            // 잡 생성 → 즉시 접수 응답. 실제 전환(isPlaying=false)은 다음 틱(delayCall)에서 — 리로드 전에 응답 flush 보장.
+            string jobId = McpJobStore.CreateJob("unity_exit_play_mode");
+
+            EditorApplication.delayCall += () =>
+            {
+                try
+                {
+                    McpJobStore.Update(jobId, McpJobStore.StatusRunning, null, null);
+                    if (EditorApplication.isPlaying) EditorApplication.isPlaying = false;
+                }
+                catch (Exception ex)
+                {
+                    McpJobStore.Update(jobId, McpJobStore.StatusFailed, null, ex.Message);
+                }
+            };
 
             return new PlayModeResult
             {
@@ -136,7 +165,8 @@ namespace Community.Unity.MCP
                 isPaused = false,
                 accepted = true,
                 transition = "stopping",
-                note = DomainReloadNote
+                note = DomainReloadNote,
+                jobId = jobId
             };
         }
 
@@ -240,6 +270,8 @@ namespace Community.Unity.MCP
             public bool accepted;
             public string transition;
             public string note;
+            // [ADDED] 리로드 생존 폴링용 — enter/exit는 이 jobId로 완료를 확인(pause/unpause는 빈 문자열).
+            public string jobId;
         }
 
         [Serializable]

@@ -75,14 +75,15 @@ namespace Community.Unity.MCP
                 return new McpToolError { error = $"Scene not found: {args.scenePath}" };
             }
             
-            // Prompt to save if there are unsaved changes
-            if (!EditorSceneManager.SaveCurrentModifiedScenesIfUserWantsTo())
+            // 미저장 변경 처리(saveMode): save(기본, 모달 없음) / discard(저장 없이) / prompt(기존 모달).
+            var saveCancelled = HandleSaveMode(args?.saveMode);
+            if (saveCancelled != null)
             {
-                return new McpToolError { error = "Operation cancelled by user" };
+                return saveCancelled;
             }
-            
-            OpenSceneMode mode = args.additive 
-                ? OpenSceneMode.Additive 
+
+            OpenSceneMode mode = args.additive
+                ? OpenSceneMode.Additive
                 : OpenSceneMode.Single;
             
             var scene = EditorSceneManager.OpenScene(args.scenePath, mode);
@@ -144,14 +145,15 @@ namespace Community.Unity.MCP
         public static object NewScene(string argsJson)
         {
             var args = JsonUtility.FromJson<NewSceneArgs>(argsJson);
-            
-            // Prompt to save if there are unsaved changes
-            if (!EditorSceneManager.SaveCurrentModifiedScenesIfUserWantsTo())
+
+            // 미저장 변경 처리(saveMode): save(기본, 모달 없음) / discard(저장 없이) / prompt(기존 모달).
+            var saveCancelled = HandleSaveMode(args?.saveMode);
+            if (saveCancelled != null)
             {
-                return new McpToolError { error = "Operation cancelled by user" };
+                return saveCancelled;
             }
-            
-            NewSceneSetup setup = args?.addDefaultGameObjects == true 
+
+            NewSceneSetup setup = args?.addDefaultGameObjects == true
                 ? NewSceneSetup.DefaultGameObjects 
                 : NewSceneSetup.EmptyScene;
             
@@ -236,6 +238,33 @@ namespace Community.Unity.MCP
 
         #region Helper Methods
 
+        /// <summary>
+        /// 씬 전환 전 미저장 변경 처리.
+        ///   save   (기본): EditorSceneManager.SaveOpenScenes() — 모달 없이 열린 씬을 저장하고 진행(자동화 기본).
+        ///   discard      : 저장 없이 그대로 진행.
+        ///   prompt       : 기존 동작 — SaveCurrentModifiedScenesIfUserWantsTo() 모달, 사용자 취소 시 중단.
+        /// 취소 시 McpToolError 를 반환하고, 그 외에는 null(진행)을 반환한다.
+        /// </summary>
+        private static McpToolError HandleSaveMode(string saveMode)
+        {
+            string mode = string.IsNullOrEmpty(saveMode) ? "save" : saveMode.Trim().ToLowerInvariant();
+            switch (mode)
+            {
+                case "discard":
+                    return null;
+                case "prompt":
+                    if (!EditorSceneManager.SaveCurrentModifiedScenesIfUserWantsTo())
+                    {
+                        return new McpToolError { error = "Operation cancelled by user" };
+                    }
+                    return null;
+                case "save":
+                default:
+                    EditorSceneManager.SaveOpenScenes();
+                    return null;
+            }
+        }
+
         private static bool IsSceneLoaded(string path)
         {
             for (int i = 0; i < SceneManager.sceneCount; i++)
@@ -276,6 +305,7 @@ namespace Community.Unity.MCP
         {
             [McpParam("Path to the scene asset", Required = true)] public string scenePath;
             [McpParam("If true, opens scene additively")] public bool additive;
+            [McpParam("How to handle unsaved changes before switching: 'save' (default: save open scenes silently, no modal), 'discard' (proceed without saving), or 'prompt' (show Unity's save dialog).")] public string saveMode;
         }
 
         [Serializable]
@@ -309,6 +339,7 @@ namespace Community.Unity.MCP
             [McpParam("Path to immediately save the new scene")] public string savePath;
             [McpParam("If true, adds Camera and Light")] public bool addDefaultGameObjects;
             [McpParam("If true, adds scene without closing current scenes")] public bool additive;
+            [McpParam("How to handle unsaved changes before creating: 'save' (default: save open scenes silently, no modal), 'discard' (proceed without saving), or 'prompt' (show Unity's save dialog).")] public string saveMode;
         }
 
         [Serializable]

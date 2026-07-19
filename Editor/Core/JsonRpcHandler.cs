@@ -1,7 +1,8 @@
 using System;
 using System.Collections.Generic;
 using System.Text;
-using System.Text.RegularExpressions;
+using Newtonsoft.Json;
+using Newtonsoft.Json.Linq;
 using UnityEngine;
 
 namespace Community.Unity.MCP
@@ -16,16 +17,19 @@ namespace Community.Unity.MCP
         /// </summary>
         public static string ProcessRequest(string requestJson)
         {
+            JToken idToken = null;
             try
             {
-                // Parse manually since JsonUtility can't handle nested objects well
-                string method = ExtractStringValue(requestJson, "method");
-                string id = ExtractStringValue(requestJson, "id");
-                string paramsJson = ExtractObjectValue(requestJson, "params");
+                // Newtonsoft로 파싱(정규식 추출 대체). id는 JToken으로 유지해 응답에 원문 타입 그대로 에코한다.
+                var root = JObject.Parse(requestJson);
+
+                idToken = root["id"]; // 숫자/문자열/null (키 부재면 C# null)
+                string method = root["method"]?.ToString();
+                JToken paramsToken = root["params"];
 
                 if (string.IsNullOrEmpty(method))
                 {
-                    return CreateErrorResponse(id, -32600, "Invalid Request: method is required");
+                    return CreateErrorResponse(idToken, -32600, "Invalid Request: method is required");
                 }
 
                 // Route to appropriate handler
@@ -33,37 +37,40 @@ namespace Community.Unity.MCP
                 switch (method)
                 {
                     case "initialize":
-                        result = HandleInitialize(paramsJson);
+                        result = HandleInitialize(paramsToken);
                         break;
                     case "tools/list":
                         result = HandleToolsList();
                         break;
                     case "tools/call":
-                        result = HandleToolsCall(paramsJson);
+                        result = HandleToolsCall(paramsToken);
                         break;
                     case "resources/list":
-                        result = ResourceHandler.HandleResourcesList(paramsJson);
+                        // ResourceHandler는 기존대로 문자열 params를 받는다(내부에서 uri 파싱). 압축 JSON 문자열로 전달.
+                        result = ResourceHandler.HandleResourcesList(paramsToken?.ToString(Formatting.None));
                         break;
                     case "resources/read":
-                        result = ResourceHandler.HandleResourcesRead(paramsJson);
+                        result = ResourceHandler.HandleResourcesRead(paramsToken?.ToString(Formatting.None));
                         break;
                     case "ping":
                         result = new { pong = true };
                         break;
                     default:
-                        return CreateErrorResponse(id, -32601, $"Method not found: {method}");
+                        // 알 수 없는 메서드(notifications/* 포함) — 기존과 동일하게 -32601 에러 응답.
+                        // (id 없는 notification이면 id:null로 에코되며 클라이언트/브릿지가 이를 무시한다.)
+                        return CreateErrorResponse(idToken, -32601, $"Method not found: {method}");
                 }
 
-                return CreateSuccessResponse(id, result);
+                return CreateSuccessResponse(idToken, result);
             }
             catch (Exception ex)
             {
                 Debug.LogError($"[MCP] JSON-RPC Error: {ex.Message}");
-                return CreateErrorResponse(null, -32700, "Parse error: " + ex.Message);
+                return CreateErrorResponse(idToken, -32700, "Parse error: " + ex.Message);
             }
         }
 
-        private static object HandleInitialize(string paramsJson)
+        private static object HandleInitialize(JToken paramsToken)
         {
             return new McpInitializeResult
             {
@@ -89,25 +96,36 @@ namespace Community.Unity.MCP
             };
         }
 
-        private static object HandleToolsCall(string paramsJson)
+        private static object HandleToolsCall(JToken paramsToken)
         {
-            if (string.IsNullOrEmpty(paramsJson))
+            if (paramsToken == null || paramsToken.Type != JTokenType.Object)
             {
                 throw new ArgumentException("Tool call requires parameters");
             }
 
-            // Extract tool name and arguments from params object
-            string toolName = ExtractStringValue(paramsJson, "name");
-            string argumentsJson = ExtractObjectValue(paramsJson, "arguments");
+            var p = (JObject)paramsToken;
+            string toolName = p["name"]?.ToString();
 
             if (string.IsNullOrEmpty(toolName))
             {
                 throw new ArgumentException("Tool name is required");
             }
 
-            // Pass empty JSON object if no arguments provided
-            if (string.IsNullOrEmpty(argumentsJson))
+            // arguments(JObject)를 압축 JSON 문자열로 도구에 전달 — argsJson 문자열 계약 불변
+            // (각 도구는 이 문자열을 JsonUtility로 재파싱한다). arguments 부재 시 빈 객체.
+            JToken argsToken = p["arguments"];
+            string argumentsJson;
+            if (argsToken == null || argsToken.Type == JTokenType.Null)
             {
+                argumentsJson = "{}";
+            }
+            else if (argsToken.Type == JTokenType.Object)
+            {
+                argumentsJson = argsToken.ToString(Formatting.None);
+            }
+            else
+            {
+                // arguments가 객체가 아니면(비정상) 빈 객체로 방어.
                 argumentsJson = "{}";
             }
 
@@ -126,166 +144,43 @@ namespace Community.Unity.MCP
             };
         }
 
-        public static string CreateSuccessResponse(string id, object result)
+        /// <summary>
+        /// 성공 응답. id는 요청 원문 타입을 보존한다(숫자→숫자, 문자열→"문자열", null/부재→null).
+        /// result는 기존과 동일하게 JsonUtility로 직렬화한다(도구 결과 JSON 형태 불변 — 이미 직렬화된 문자열을 이중 인코딩하지 않음).
+        /// id 파라미터는 JToken이며, McpServer의 CreateErrorResponse(null, ...) 호출은 null이 JToken으로 바인딩돼 그대로 컴파일된다.
+        /// </summary>
+        public static string CreateSuccessResponse(JToken id, object result)
         {
             var sb = new StringBuilder();
             sb.Append("{\"jsonrpc\":\"2.0\",");
-            if (!string.IsNullOrEmpty(id))
-            {
-                sb.Append($"\"id\":\"{id}\",");
-            }
-            else
-            {
-                sb.Append("\"id\":null,");
-            }
+            sb.Append("\"id\":").Append(SerializeId(id)).Append(",");
             sb.Append("\"result\":");
             sb.Append(JsonUtility.ToJson(result));
             sb.Append("}");
             return sb.ToString();
         }
 
-        public static string CreateErrorResponse(string id, int code, string message)
+        /// <summary>
+        /// 에러 응답. id는 요청 원문 타입을 보존한다. message는 Newtonsoft로 안전하게 이스케이프/인용한다.
+        /// </summary>
+        public static string CreateErrorResponse(JToken id, int code, string message)
         {
             var sb = new StringBuilder();
             sb.Append("{\"jsonrpc\":\"2.0\",");
-            if (!string.IsNullOrEmpty(id))
-            {
-                sb.Append($"\"id\":\"{id}\",");
-            }
-            else
-            {
-                sb.Append("\"id\":null,");
-            }
-            sb.Append($"\"error\":{{\"code\":{code},\"message\":\"{EscapeJson(message)}\"}}}}");
+            sb.Append("\"id\":").Append(SerializeId(id)).Append(",");
+            sb.Append("\"error\":{\"code\":").Append(code).Append(",\"message\":")
+              .Append(JsonConvert.SerializeObject(message ?? string.Empty)).Append("}}");
             return sb.ToString();
         }
 
-        private static string EscapeJson(string str)
-        {
-            if (string.IsNullOrEmpty(str)) return str;
-            return str.Replace("\\", "\\\\").Replace("\"", "\\\"").Replace("\n", "\\n").Replace("\r", "\\r");
-        }
-
         /// <summary>
-        /// Extract a string value from a JSON object.
+        /// JSON-RPC id를 원문 타입 그대로 직렬화한다. 부재/null → "null", 숫자 → 숫자, 문자열 → 인용 문자열.
+        /// (Newtonsoft JValue.ToString()은 문자열을 인용부호 없이 반환하므로 JsonConvert.SerializeObject를 사용.)
         /// </summary>
-        private static string ExtractStringValue(string json, string key)
+        private static string SerializeId(JToken id)
         {
-            if (string.IsNullOrEmpty(json)) return null;
-
-            // Pattern: "key":"value" or "key": "value"
-            var pattern = $"\"{key}\"\\s*:\\s*\"([^\"]*)\"";
-            var match = Regex.Match(json, pattern);
-            if (match.Success)
-            {
-                return match.Groups[1].Value;
-            }
-
-            // Try numeric/null value: "key":123 or "key":null
-            pattern = $"\"{key}\"\\s*:\\s*([^,}}\\]]+)";
-            match = Regex.Match(json, pattern);
-            if (match.Success)
-            {
-                var value = match.Groups[1].Value.Trim();
-                if (value == "null") return null;
-                // Remove quotes if present
-                if (value.StartsWith("\"") && value.EndsWith("\""))
-                {
-                    return value.Substring(1, value.Length - 2);
-                }
-                return value;
-            }
-
-            return null;
-        }
-
-        /// <summary>
-        /// Extract a nested object value from a JSON object.
-        /// </summary>
-        private static string ExtractObjectValue(string json, string key)
-        {
-            if (string.IsNullOrEmpty(json)) return null;
-
-            // Find the key
-            var keyPattern = $"\"{key}\"\\s*:";
-            var keyMatch = Regex.Match(json, keyPattern);
-            if (!keyMatch.Success) return null;
-
-            int startIndex = keyMatch.Index + keyMatch.Length;
-
-            // Skip whitespace
-            while (startIndex < json.Length && char.IsWhiteSpace(json[startIndex]))
-            {
-                startIndex++;
-            }
-
-            if (startIndex >= json.Length) return null;
-
-            char startChar = json[startIndex];
-
-            // If it's an object or array, find the matching closing bracket
-            if (startChar == '{' || startChar == '[')
-            {
-                char endChar = startChar == '{' ? '}' : ']';
-                int depth = 1;
-                int endIndex = startIndex + 1;
-                bool inString = false;
-
-                while (endIndex < json.Length && depth > 0)
-                {
-                    char c = json[endIndex];
-
-                    if (inString)
-                    {
-                        if (c == '"' && json[endIndex - 1] != '\\')
-                        {
-                            inString = false;
-                        }
-                    }
-                    else
-                    {
-                        if (c == '"')
-                        {
-                            inString = true;
-                        }
-                        else if (c == startChar)
-                        {
-                            depth++;
-                        }
-                        else if (c == endChar)
-                        {
-                            depth--;
-                        }
-                    }
-                    endIndex++;
-                }
-
-                return json.Substring(startIndex, endIndex - startIndex);
-            }
-
-            // If it's a string, extract it
-            if (startChar == '"')
-            {
-                int endIndex = startIndex + 1;
-                while (endIndex < json.Length)
-                {
-                    if (json[endIndex] == '"' && json[endIndex - 1] != '\\')
-                    {
-                        break;
-                    }
-                    endIndex++;
-                }
-                return json.Substring(startIndex + 1, endIndex - startIndex - 1);
-            }
-
-            // Otherwise it's a primitive, extract until comma or closing bracket
-            int end = startIndex;
-            while (end < json.Length && json[end] != ',' && json[end] != '}' && json[end] != ']')
-            {
-                end++;
-            }
-
-            return json.Substring(startIndex, end - startIndex).Trim();
+            if (id == null || id.Type == JTokenType.Null) return "null";
+            return JsonConvert.SerializeObject(id);
         }
     }
 

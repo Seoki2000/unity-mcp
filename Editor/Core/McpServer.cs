@@ -21,7 +21,8 @@ namespace Community.Unity.MCP
         private static McpServer _instance;
         private HttpListener _listener;
         private Thread _listenerThread;
-        private bool _isRunning;
+        // volatile: ListenLoop(백그라운드 스레드)의 비정상 탈출 정정에서도 쓰기가 일어나므로 스레드 간 가시성 보장.
+        private volatile bool _isRunning;
         private readonly Queue<Action> _mainThreadQueue = new Queue<Action>();
         private readonly ConcurrentDictionary<Guid, HttpListenerResponse> _sseClients = new ConcurrentDictionary<Guid, HttpListenerResponse>();
 
@@ -64,6 +65,47 @@ namespace Community.Unity.MCP
             // 진행 중이던 요청이 응답을 못 받고 클라이언트가 무한 대기에 빠진다.
             AssemblyReloadEvents.beforeAssemblyReload += StopInstance;
             EditorApplication.quitting += StopInstance;
+
+            // 리로드 직후: 서버 재기동 보강 + 미완 잡 확정. (AutoStart의 delayCall과 중복돼도 idempotent)
+            AssemblyReloadEvents.afterAssemblyReload += OnAfterAssemblyReload;
+        }
+
+        /// <summary>
+        /// 도메인 리로드 직후 처리:
+        /// (a) 서버 재기동 보강 — 기존 AutoStart(delayCall)와 중복돼도 안전(Start는 _isRunning이면 즉시 return, _userStopped 존중).
+        /// (b) McpJobStore 로드 + 리로드를 넘긴 accepted/running 잡을 라이브 상태로 확정.
+        /// </summary>
+        private static void OnAfterAssemblyReload()
+        {
+            try
+            {
+                if (ShouldAutoHost() && !Instance._userStopped && !Instance.IsRunning)
+                {
+                    Instance.Start(EditorPrefs.GetInt("MCP_Port", 3000));
+                }
+            }
+            catch (Exception ex)
+            {
+                Debug.LogWarning($"[MCP] afterAssemblyReload restart failed: {ex.Message}");
+            }
+
+            try
+            {
+                McpJobStore.Reload();
+                JobTools.ConfirmPendingAfterReload();
+            }
+            catch (Exception ex)
+            {
+                Debug.LogWarning($"[MCP] afterAssemblyReload job confirm failed: {ex.Message}");
+            }
+        }
+
+        /// <summary>배치/CI 모드와 MPPM 가상 플레이어(/Library/VP/)에서는 서버를 자동 호스팅하지 않는다.</summary>
+        private static bool ShouldAutoHost()
+        {
+            if (Application.isBatchMode) return false;
+            if (Application.dataPath.Replace('\\', '/').Contains("/Library/VP/")) return false;
+            return true;
         }
 
         private static void StopInstance()
@@ -192,6 +234,15 @@ namespace Community.Unity.MCP
 
             if (!_isRunning) return;
 
+            // 死코드였던 SSE 알림 부활: 도메인 리로드 임박을 best-effort로 통지한다.
+            // _isRunning=false 로 내리기 전(=SSE 클라이언트가 아직 살아있을 때) 보낸다.
+            // 브릿지는 이 노티를 받으면 내부 상태만 마킹하고 MCP 클라이언트로는 전달하지 않는다(추가적 알림).
+            try
+            {
+                SendNotification("{\"jsonrpc\":\"2.0\",\"method\":\"unity/reloading\",\"params\":{\"reason\":\"domain-reload\"}}");
+            }
+            catch { }
+
             _isRunning = false;
             _shutdownEvent.Set(); // 대기 중인 HandleMessage들을 깨워 에러 응답 후 종료하게 함
 
@@ -273,6 +324,33 @@ namespace Community.Unity.MCP
                     break; // 알 수 없는 오류로 무한 루프 도는 것 방지 — 종료 후 재시작에 맡김
                 }
             }
+
+            HandleListenLoopExit();
+        }
+
+        /// <summary>
+        /// ListenLoop 탈출 후 처리. Stop()에 의한 정상 탈출이면 _isRunning은 이미 false이므로 아무것도 안 한다.
+        /// 그렇지 않은데(예외로 스레드만 죽음) 여전히 _isRunning=true로 남으면 IsRunning 오보고 + 재시도 미발동이
+        /// 되므로, 여기서 상태를 정정하고 메인 스레드로 상태 이벤트/백오프 재시도를 넘긴다.
+        /// </summary>
+        private void HandleListenLoopExit()
+        {
+            if (!_isRunning) return; // 정상 셧다운(Stop) — 처리 불필요.
+
+            // 비정상 탈출: 스레드는 죽었는데 서버는 running으로 알고 있음 → 상태 정정.
+            _isRunning = false;
+            try { _listener?.Stop(); _listener?.Close(); } catch { }
+
+            // OnServerStateChanged/ScheduleStartRetry 는 에디터 API(EditorApplication.*)를 만지므로 메인 스레드에서 실행.
+            EnqueueMainThread(() =>
+            {
+                OnServerStateChanged?.Invoke(false);
+                if (!_userStopped)
+                {
+                    Debug.LogWarning("[MCP] Listener thread exited unexpectedly — scheduling restart.");
+                    ScheduleStartRetry(Port);
+                }
+            });
         }
 
         private void HandleRequest(HttpListenerContext context)
