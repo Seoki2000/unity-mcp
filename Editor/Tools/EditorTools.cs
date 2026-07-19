@@ -102,11 +102,12 @@ namespace Community.Unity.MCP
                 return new McpToolError { error = "Cannot enter play mode while compiling" };
             }
 
-            // 잡 생성 → 즉시 접수 응답. 실제 전환(isPlaying=true)은 응답이 POST로 flush된 다음 틱(delayCall)에서 —
+            // 잡 생성 → 즉시 접수 응답. 실제 전환(isPlaying=true)은 응답이 POST로 flush된 다음 update 틱에서 —
             // 도메인 리로드가 응답 전에 시작돼 브릿지가 끊기는 것을 피한다.
+            // (delayCall 금지: 미포커스 에디터에서 무기한 기아 — McpEditorDispatch 주석 참조)
             string jobId = McpJobStore.CreateJob("unity_enter_play_mode");
 
-            EditorApplication.delayCall += () =>
+            McpEditorDispatch.RunOnNextEditorUpdate(() =>
             {
                 try
                 {
@@ -117,7 +118,7 @@ namespace Community.Unity.MCP
                 {
                     McpJobStore.Update(jobId, McpJobStore.StatusFailed, null, ex.Message);
                 }
-            };
+            });
 
             // 이 시점 isPlaying은 아직 false(전환 전) — 조기에 true로 단정하지 않고 실제 값을 그대로 보고한다.
             return new PlayModeResult
@@ -141,10 +142,11 @@ namespace Community.Unity.MCP
                 return new PlayModeErrorResult { error = "Not in play mode", isPlaying = false };
             }
 
-            // 잡 생성 → 즉시 접수 응답. 실제 전환(isPlaying=false)은 다음 틱(delayCall)에서 — 리로드 전에 응답 flush 보장.
+            // 잡 생성 → 즉시 접수 응답. 실제 전환(isPlaying=false)은 다음 update 틱에서 — 리로드 전에 응답 flush 보장.
+            // (delayCall 금지: 미포커스 에디터에서 무기한 기아 — McpEditorDispatch 주석 참조)
             string jobId = McpJobStore.CreateJob("unity_exit_play_mode");
 
-            EditorApplication.delayCall += () =>
+            McpEditorDispatch.RunOnNextEditorUpdate(() =>
             {
                 try
                 {
@@ -155,7 +157,7 @@ namespace Community.Unity.MCP
                 {
                     McpJobStore.Update(jobId, McpJobStore.StatusFailed, null, ex.Message);
                 }
-            };
+            });
 
             return new PlayModeResult
             {

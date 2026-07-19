@@ -117,16 +117,19 @@ namespace Community.Unity.MCP
             }
 
             // 잡 생성 → 즉시 accepted 응답. 실제 부작용(Refresh + 재컴파일 요청)은 응답이 POST로 flush된
-            // 다음 에디터 틱(delayCall)에서 실행한다. 그래야 도메인 리로드가 응답 flush 전에 시작돼
+            // 다음 update 틱에서 실행한다. 그래야 도메인 리로드가 응답 flush 전에 시작돼
             // 브릿지가 연결 리셋을 겪는 일을 피할 수 있다.
+            // (delayCall 금지: 미포커스 에디터에서 GUI 업데이트와 함께 무기한 기아 — 실측 2026-07-19)
             string jobId = McpJobStore.CreateJob("unity_recompile_scripts");
 
-            EditorApplication.delayCall += () =>
+            // 완료 판정용 "대기 중" 표시는 디스패치 전에 등록한다 —
+            // 디스패치 콜백 안에서 등록하면 그 전 폴링이 "컴파일 없음+에러 0"을 done으로 오판한다(실측).
+            MarkRecompileDispatched(jobId);
+
+            McpEditorDispatch.RunOnNextEditorUpdate(() =>
             {
                 try
                 {
-                    // 컴파일 완료 판정을 위해 "대기 중" 표시(리로드 시 소멸).
-                    MarkRecompileDispatched(jobId);
                     McpJobStore.Update(jobId, McpJobStore.StatusRunning, null, null);
 
                     // Refresh 를 먼저 하는 이유: 신규 파일이 임포트되지 않은 채 RequestScriptCompilation 만 하면
@@ -138,7 +141,7 @@ namespace Community.Unity.MCP
                 {
                     McpJobStore.Update(jobId, McpJobStore.StatusFailed, null, ex.Message);
                 }
-            };
+            });
 
             return new RecompileAcceptedResult
             {
@@ -152,7 +155,7 @@ namespace Community.Unity.MCP
 
         // --- JobTools(동일 어셈블리)에서 재사용하는 컴파일 상태 접근자 ------------------------------
 
-        /// <summary>재컴파일 잡을 "대기 중"으로 표시(delayCall에서 호출).</summary>
+        /// <summary>재컴파일 잡을 "대기 중"으로 표시(잡 생성 직후, 디스패치 전에 호출).</summary>
         internal static void MarkRecompileDispatched(string jobId)
         {
             if (string.IsNullOrEmpty(jobId)) return;
@@ -263,5 +266,27 @@ namespace Community.Unity.MCP
         }
 
         #endregion
+    }
+
+    /// <summary>
+    /// 다음 EditorApplication.update 틱에 액션을 1회 실행한다.
+    /// EditorApplication.delayCall 은 GUI/인스펙터 업데이트에 묶여 있어 에디터가 미포커스면
+    /// 무기한 발화하지 않을 수 있다(실측 2026-07-19: 요청 펌프(update)는 도는데 delayCall 은 수 분째 미발화).
+    /// update 는 미포커스에서도 틱하므로 지연 디스패치는 이것을 쓴다.
+    /// 등록 시점의 update 순회에는 포함되지 않으므로(멀티캐스트 델리게이트 스냅샷) 최소 다음 틱 실행이 보장된다.
+    /// </summary>
+    internal static class McpEditorDispatch
+    {
+        internal static void RunOnNextEditorUpdate(Action action)
+        {
+            EditorApplication.CallbackFunction wrapper = null;
+            wrapper = () =>
+            {
+                EditorApplication.update -= wrapper;
+                try { action(); }
+                catch (Exception ex) { Debug.LogError($"[MCP] Deferred editor action failed: {ex.Message}"); }
+            };
+            EditorApplication.update += wrapper;
+        }
     }
 }
