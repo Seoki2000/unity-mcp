@@ -156,16 +156,33 @@ namespace Community.Unity.MCP
 
             try
             {
+                // 'localhost' 프리픽스만 쓰면 Mono HttpListener가 환경에 따라 ::1 한쪽에만 바인딩해
+                // (실측 2026-07-19: [::1]:3000 단독 LISTEN, IPv4 없음) IPv4로 접속하는 클라이언트가
+                // 서버가 켜져 있어도 ECONNREFUSED를 받는다. 양쪽 루프백을 명시 바인딩하고,
+                // IPv6을 못 쓰는 환경이면 IPv4 구성으로 폴백한다.
                 _listener = new HttpListener();
                 _listener.Prefixes.Add($"http://localhost:{port}/");
-                _listener.Start();
+                _listener.Prefixes.Add($"http://127.0.0.1:{port}/");
+                _listener.Prefixes.Add($"http://[::1]:{port}/");
+                try
+                {
+                    _listener.Start();
+                }
+                catch (Exception)
+                {
+                    try { _listener.Close(); } catch { }
+                    _listener = new HttpListener();
+                    _listener.Prefixes.Add($"http://localhost:{port}/");
+                    _listener.Prefixes.Add($"http://127.0.0.1:{port}/");
+                    _listener.Start();
+                }
 
                 _isRunning = true;
                 _startRetryCount = 0; // 성공 — 재시도 카운터 리셋
                 _listenerThread = new Thread(ListenLoop) { IsBackground = true };
                 _listenerThread.Start();
 
-                Debug.Log($"[MCP] Server started on http://localhost:{port}/");
+                Debug.Log($"[MCP] Server started on port {port} (prefixes: {string.Join(", ", _listener.Prefixes)})");
                 OnServerStateChanged?.Invoke(true);
             }
             catch (Exception ex)

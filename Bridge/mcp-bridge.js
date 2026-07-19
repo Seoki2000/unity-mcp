@@ -1,7 +1,32 @@
 const http = require('http');
+const fs = require('fs');
+const path = require('path');
+const os = require('os');
 
 const UNITY_PORT = process.env.UNITY_MCP_PORT || 3000;
-const UNITY_HOST = process.env.UNITY_MCP_HOST || 'localhost';
+
+// 'localhost' 단일 해석에 의존하면 서버(Mono HttpListener)가 ::1 한쪽에만 바인딩하는 환경에서
+// 서버가 켜져 있어도 ECONNREFUSED가 난다(2026-07-19 실측: [::1]:3000 단독 LISTEN, IPv4 없음).
+// 명시적 루프백 후보를 순환하며 마지막으로 성공한 호스트를 유지한다(sticky).
+const HOST_CANDIDATES = process.env.UNITY_MCP_HOST ? [process.env.UNITY_MCP_HOST] : ['127.0.0.1', '::1'];
+let hostIndex = 0;
+function currentHost() { return HOST_CANDIDATES[hostIndex]; }
+function rotateHost(reason) {
+    if (HOST_CANDIDATES.length < 2) return;
+    hostIndex = (hostIndex + 1) % HOST_CANDIDATES.length;
+    log(`Switching Unity host candidate to ${currentHost()} (${reason})`);
+}
+
+// Mono HttpListener는 IPv6 리터럴 Host 헤더("[::1]:3000")를 파싱 못 해 400을 낸다(실측:
+// "Invalid url: http://[:3000/..."). ::1로 접속할 땐 그 엔드포인트에 등록된 'localhost'
+// 프리픽스와 매칭되도록 Host를 localhost로 보내고, IPv4는 주소 그대로 보낸다.
+function hostHeaderFor(host) {
+    return (host.indexOf(':') >= 0 ? 'localhost' : host) + ':' + UNITY_PORT;
+}
+
+// tools/list 결과 디스크 캐시 — Unity가 컴파일/리로드 중이라 응답 못 해도
+// 마지막으로 성공한 도구 목록을 돌려줘 MCP 연결 수립이 Unity 타이밍에 인질로 잡히지 않게 한다.
+const TOOLS_CACHE_PATH = path.join(os.homedir(), '.unity-mcp', 'tools-cache.json');
 
 // 요청 타임아웃(서버측 큐 타임아웃 30s보다 길게) / 연결거부 재시도 (도메인 리로드 윈도우 커버)
 const REQUEST_TIMEOUT_MS = 45000;
@@ -75,6 +100,28 @@ function normalizeForMcpClient(data) {
     }
 }
 
+function saveToolsCache(toolsArray) {
+    try {
+        fs.mkdir(path.dirname(TOOLS_CACHE_PATH), { recursive: true }, () => {
+            fs.writeFile(TOOLS_CACHE_PATH,
+                JSON.stringify({ savedAt: new Date().toISOString(), tools: toolsArray }),
+                () => {});
+        });
+    } catch (e) { /* best-effort */ }
+}
+
+function tryServeToolsFromCache(requestId, reason) {
+    try {
+        const cached = JSON.parse(fs.readFileSync(TOOLS_CACHE_PATH, 'utf8'));
+        if (cached && Array.isArray(cached.tools) && cached.tools.length > 0) {
+            log(`tools/list served from cache (${cached.tools.length} tools, saved ${cached.savedAt}) — ${reason}`);
+            console.log(JSON.stringify({ jsonrpc: '2.0', id: requestId, result: { tools: cached.tools } }));
+            return true;
+        }
+    } catch (e) { /* 캐시 없음/손상 — 폴백 불가 */ }
+    return false;
+}
+
 // 1. Handle Stdin -> POST to Unity
 const readline = require('readline');
 const rl = readline.createInterface({
@@ -93,7 +140,30 @@ rl.on('line', (line) => {
         parsedLine = null;
     }
 
-    if (parsedLine && parsedLine.method === 'notifications/initialized') {
+    // MCP 핸드셰이크는 브릿지가 즉답한다 — 연결 수립이 Unity의 컴파일/리로드 타이밍에 좌우되지 않게.
+    // (기존에는 initialize도 Unity까지 왕복시켜, CC 시작 순간 Unity가 리로드 중이면 서버 전체가 '연결 실패'로 마킹됐다)
+    if (parsedLine && parsedLine.id !== undefined && parsedLine.method === 'initialize') {
+        const requestedVersion = (parsedLine.params && parsedLine.params.protocolVersion) || '2024-11-05';
+        console.log(JSON.stringify({
+            jsonrpc: '2.0',
+            id: parsedLine.id,
+            result: {
+                protocolVersion: requestedVersion,
+                capabilities: { tools: { listChanged: false } },
+                serverInfo: { name: 'unity-mcp-bridge', version: '2.2.0' }
+            }
+        }));
+        return;
+    }
+
+    // MCP 레벨 ping도 로컬 즉답(브릿지 생존 확인 용도 — Unity 생존은 하트비트가 별도 추적).
+    if (parsedLine && parsedLine.id !== undefined && parsedLine.method === 'ping') {
+        console.log(JSON.stringify({ jsonrpc: '2.0', id: parsedLine.id, result: {} }));
+        return;
+    }
+
+    // 모든 notification(id 없음)은 로컬에서 소화 — Unity로 보내면 -32601 노이즈만 생긴다.
+    if (parsedLine && parsedLine.id === undefined && typeof parsedLine.method === 'string') {
         return;
     }
 
@@ -122,11 +192,12 @@ function postToUnity(line, requestId, retriesLeft, parsedLine) {
     let settled = false; // 응답/에러를 정확히 1번만 처리
 
     const req = http.request({
-        hostname: UNITY_HOST,
+        hostname: currentHost(),
         port: UNITY_PORT,
         path: '/message',
         method: 'POST',
         headers: {
+            'Host': hostHeaderFor(currentHost()),
             'Content-Type': 'application/json',
             'Content-Length': Buffer.byteLength(line)
         }
@@ -144,10 +215,20 @@ function postToUnity(line, requestId, retriesLeft, parsedLine) {
                 lastAliveAt = Date.now(); // Unity가 정상 응답 — 생존 시각 갱신
                 const normalized = normalizeForMcpClient(data);
                 if (normalized) {
+                    // tools/list 성공 결과는 디스크에 캐시 — 다음 CC 시작 때 Unity가 리로드 중이어도 목록을 낼 수 있게.
+                    if (parsedLine && parsedLine.method === 'tools/list') {
+                        try {
+                            const parsed = JSON.parse(normalized);
+                            if (parsed && parsed.result && Array.isArray(parsed.result.tools)) {
+                                saveToolsCache(parsed.result.tools);
+                            }
+                        } catch (e) { /* best-effort */ }
+                    }
                     console.log(normalized);
                 }
             } else {
                 // 200인데 빈 응답 — 서버가 리로드로 끊긴 경우
+                if (parsedLine && parsedLine.method === 'tools/list' && tryServeToolsFromCache(requestId, 'empty response (reloading?)')) return;
                 sendErrorResponse(requestId, -32000, 'Empty response from Unity (editor reloading?)');
             }
         });
@@ -166,6 +247,7 @@ function postToUnity(line, requestId, retriesLeft, parsedLine) {
         settled = true;
         req.destroy();
         log(`Request timeout after ${REQUEST_TIMEOUT_MS}ms`);
+        if (parsedLine && parsedLine.method === 'tools/list' && tryServeToolsFromCache(requestId, 'request timeout')) return;
         sendErrorResponse(requestId, -32001, `Unity request timeout (${REQUEST_TIMEOUT_MS / 1000}s) — editor may be compiling. Retry shortly.`);
     });
 
@@ -191,6 +273,11 @@ function postToUnity(line, requestId, retriesLeft, parsedLine) {
         }
 
         if (retriable && retriesLeft > 0) {
+            // 연결 거부는 반대쪽 루프백(::1↔127.0.0.1)에 서버가 있을 수 있으므로 후보를 바꿔 재시도.
+            if (e.code === 'ECONNREFUSED') {
+                const failedHost = currentHost();
+                rotateHost(`ECONNREFUSED on ${failedHost}`);
+            }
             log(`Unity unreachable (${e.code}), retrying in ${RETRY_DELAY_MS}ms... (${retriesLeft} left)`);
             setTimeout(() => postToUnity(line, requestId, retriesLeft - 1, parsedLine), RETRY_DELAY_MS);
             return;
@@ -203,6 +290,7 @@ function postToUnity(line, requestId, retriesLeft, parsedLine) {
             return;
         }
 
+        if (parsedLine && parsedLine.method === 'tools/list' && tryServeToolsFromCache(requestId, `unreachable: ${e.code || e.message}`)) return;
         log(`Error posting to Unity: ${e.message}`);
         sendErrorResponse(requestId, -32000, `Cannot reach Unity MCP server: ${e.message}`);
     });
@@ -216,11 +304,12 @@ function postToUnity(line, requestId, retriesLeft, parsedLine) {
 function heartbeatPing() {
     const payload = JSON.stringify({ jsonrpc: '2.0', id: '__hb', method: 'ping' });
     const req = http.request({
-        hostname: UNITY_HOST,
+        hostname: currentHost(),
         port: UNITY_PORT,
         path: '/message',
         method: 'POST',
         headers: {
+            'Host': hostHeaderFor(currentHost()),
             'Content-Type': 'application/json',
             'Content-Length': Buffer.byteLength(payload)
         }
@@ -237,8 +326,13 @@ function heartbeatPing() {
     req.setTimeout(HEARTBEAT_TIMEOUT_MS, () => {
         try { req.destroy(); } catch (e) {}
     });
-    req.on('error', () => {
-        // Unity 미응답(리로드/미기동) — lastAliveAt 갱신하지 않음. 조용히 무시.
+    req.on('error', (e) => {
+        // Unity 미응답(리로드/미기동) — lastAliveAt 갱신하지 않음.
+        // 연결 거부면 다음 시도가 반대쪽 루프백을 찍도록 후보 순환(sticky host 자가 교정).
+        if (e && e.code === 'ECONNREFUSED') {
+            const failedHost = currentHost();
+            rotateHost(`heartbeat ECONNREFUSED on ${failedHost}`);
+        }
     });
     req.write(payload);
     req.end();
@@ -246,14 +340,15 @@ function heartbeatPing() {
 
 // 2. Handle SSE from Unity -> Stdout
 function connectSSE() {
-    log(`Connecting to Unity at http://${UNITY_HOST}:${UNITY_PORT}/sse`);
+    log(`Connecting to Unity at http://${currentHost()}:${UNITY_PORT}/sse`);
 
     const req = http.request({
-        hostname: UNITY_HOST,
+        hostname: currentHost(),
         port: UNITY_PORT,
         path: '/sse',
         method: 'GET',
         headers: {
+            'Host': hostHeaderFor(currentHost()),
             'Accept': 'text/event-stream'
         }
     }, (res) => {
@@ -303,6 +398,10 @@ function connectSSE() {
     });
 
     req.on('error', (e) => {
+        if (e && e.code === 'ECONNREFUSED') {
+            const failedHost = currentHost();
+            rotateHost(`SSE ECONNREFUSED on ${failedHost}`);
+        }
         setTimeout(connectSSE, 5000);
     });
 
@@ -316,4 +415,4 @@ connectSSE();
 const heartbeatTimer = setInterval(heartbeatPing, HEARTBEAT_INTERVAL_MS);
 if (heartbeatTimer.unref) heartbeatTimer.unref();
 
-log('Bridge started. Waiting for MCP client input...');
+log(`Bridge started (Unity host candidates: ${HOST_CANDIDATES.join(', ')} port ${UNITY_PORT}). Waiting for MCP client input...`);
