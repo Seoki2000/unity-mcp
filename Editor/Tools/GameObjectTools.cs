@@ -284,29 +284,37 @@ namespace Community.Unity.MCP
             if (componentType == null)
                 return new McpToolError { error = $"Component type not found: {args.componentType}" };
             
-            var component = go.GetComponent(componentType);
-            if (component == null)
-                return new McpToolError { error = $"Component not found on GameObject: {args.componentType}" };
+            var comp = go.GetComponent(componentType);
+            if (comp == null)
+                return new McpToolError { error = $"Component {args.componentType} not found on GameObject" };
             
-            // Use SerializedObject for undo support
-            var serializedObject = new SerializedObject(component);
+            var serializedObject = new SerializedObject(comp);
             var property = serializedObject.FindProperty(args.propertyName);
             
             if (property == null)
-            {
-                return new McpToolError { error = $"Property not found: {args.propertyName}" };
-            }
+                return new McpToolError { error = $"Property {args.propertyName} not found on component {args.componentType}" };
             
             try
             {
-                SetSerializedPropertyValue(property, args.value);
+                // Simple parsing for basic types
+                if (property.propertyType == SerializedPropertyType.Integer && int.TryParse(args.value, out int intVal))
+                    property.intValue = intVal;
+                else if (property.propertyType == SerializedPropertyType.Float && float.TryParse(args.value, out float floatVal))
+                    property.floatValue = floatVal;
+                else if (property.propertyType == SerializedPropertyType.Boolean && bool.TryParse(args.value, out bool boolVal))
+                    property.boolValue = boolVal;
+                else if (property.propertyType == SerializedPropertyType.String)
+                    property.stringValue = args.value;
+                else
+                    return new McpToolError { error = $"Unsupported property type for string assignment: {property.propertyType}" };
+                
                 serializedObject.ApplyModifiedProperties();
                 
                 return new SetPropertyResult
                 {
                     success = true,
                     path = args.path,
-                    componentType = args.componentType,
+                    componentType = componentType.Name,
                     propertyName = args.propertyName,
                     newValue = args.value
                 };
@@ -314,6 +322,71 @@ namespace Community.Unity.MCP
             catch (Exception ex)
             {
                 return new McpToolError { error = $"Failed to set property: {ex.Message}" };
+            }
+        }
+
+        [McpTool("unity_get_component_properties", "Get the serialized properties of a component", typeof(GetComponentPropertiesArgs))]
+        public static object GetComponentProperties(string argsJson)
+        {
+            var args = JsonUtility.FromJson<GetComponentPropertiesArgs>(argsJson);
+            if (string.IsNullOrEmpty(args?.path))
+                return new McpToolError { error = "path parameter is required" };
+            if (string.IsNullOrEmpty(args?.componentType))
+                return new McpToolError { error = "componentType parameter is required" };
+
+            var go = GameObject.Find(args.path);
+            if (go == null)
+                return new McpToolError { error = $"GameObject not found: {args.path}" };
+
+            var compType = FindComponentType(args.componentType);
+            if (compType == null)
+                return new McpToolError { error = $"Component type not found: {args.componentType}" };
+
+            var comp = go.GetComponent(compType);
+            if (comp == null)
+                return new McpToolError { error = $"Component {args.componentType} not found on {args.path}" };
+
+            var serializedObj = new SerializedObject(comp);
+            var prop = serializedObj.GetIterator();
+            var properties = new List<ComponentPropertyInfo>();
+
+            if (prop.NextVisible(true))
+            {
+                do
+                {
+                    if (prop.name == "m_Script") continue;
+
+                    properties.Add(new ComponentPropertyInfo
+                    {
+                        name = prop.name,
+                        type = prop.propertyType.ToString(),
+                        value = GetSerializedPropertyValue(prop)
+                    });
+                } while (prop.NextVisible(false));
+            }
+
+            return new ComponentPropertiesResult
+            {
+                gameObjectPath = args.path,
+                componentType = compType.Name,
+                properties = properties.ToArray()
+            };
+        }
+
+        private static string GetSerializedPropertyValue(SerializedProperty prop)
+        {
+            switch (prop.propertyType)
+            {
+                case SerializedPropertyType.Integer: return prop.intValue.ToString();
+                case SerializedPropertyType.Boolean: return prop.boolValue.ToString();
+                case SerializedPropertyType.Float: return prop.floatValue.ToString();
+                case SerializedPropertyType.String: return prop.stringValue;
+                case SerializedPropertyType.Color: return prop.colorValue.ToString();
+                case SerializedPropertyType.ObjectReference: return prop.objectReferenceValue != null ? prop.objectReferenceValue.name : "null";
+                case SerializedPropertyType.Vector2: return prop.vector2Value.ToString();
+                case SerializedPropertyType.Vector3: return prop.vector3Value.ToString();
+                case SerializedPropertyType.Enum: return prop.enumNames.Length > prop.enumValueIndex && prop.enumValueIndex >= 0 ? prop.enumNames[prop.enumValueIndex] : prop.enumValueIndex.ToString();
+                default: return "UnsupportedType: " + prop.propertyType.ToString();
             }
         }
 
@@ -553,6 +626,29 @@ namespace Community.Unity.MCP
             public string componentType;
             public string propertyName;
             public string newValue;
+        }
+
+        [Serializable]
+        public class GetComponentPropertiesArgs
+        {
+            [McpParam("Path to the GameObject", Required = true)] public string path;
+            [McpParam("Type name of the component", Required = true)] public string componentType;
+        }
+
+        [Serializable]
+        public class ComponentPropertyInfo
+        {
+            public string name;
+            public string type;
+            public string value;
+        }
+
+        [Serializable]
+        public class ComponentPropertiesResult
+        {
+            public string gameObjectPath;
+            public string componentType;
+            public ComponentPropertyInfo[] properties;
         }
 
         #endregion

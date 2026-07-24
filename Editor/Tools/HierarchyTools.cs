@@ -104,6 +104,76 @@ namespace Community.Unity.MCP
             };
         }
 
+        [McpTool("unity_find_objects_by_component", "Find all GameObjects in the active scene that have a specific component", typeof(FindObjectsArgs))]
+        public static object FindObjectsByComponent(string argsJson)
+        {
+            var args = JsonUtility.FromJson<FindObjectsArgs>(argsJson);
+            if (string.IsNullOrEmpty(args?.componentName))
+                return new McpToolError { error = "componentName is required" };
+
+            var type = GetTypeByName(args.componentName);
+            if (type == null)
+                return new McpToolError { error = $"Component type not found: {args.componentName}" };
+
+            var objects = UnityEngine.Object.FindObjectsByType(type, UnityEngine.FindObjectsInactive.Include, UnityEngine.FindObjectsSortMode.None);
+            var results = new List<string>();
+            foreach (var obj in objects)
+            {
+                if (obj is Component comp && comp.gameObject != null)
+                {
+                    results.Add(GetGameObjectPath(comp.gameObject));
+                }
+                else if (obj is GameObject go)
+                {
+                    results.Add(GetGameObjectPath(go));
+                }
+            }
+
+            return new FindObjectsResult { componentName = args.componentName, count = results.Count, paths = results.ToArray() };
+        }
+
+        [McpTool("unity_set_object_parent", "Set the parent of a GameObject", typeof(SetParentArgs))]
+        public static object SetObjectParent(string argsJson)
+        {
+            var args = JsonUtility.FromJson<SetParentArgs>(argsJson);
+            if (string.IsNullOrEmpty(args?.childPath))
+                return new McpToolError { error = "childPath is required" };
+
+            var childGo = GameObject.Find(args.childPath);
+            if (childGo == null)
+                return new McpToolError { error = $"Child GameObject not found: {args.childPath}" };
+
+            Transform parentTransform = null;
+            if (!string.IsNullOrEmpty(args.parentPath))
+            {
+                var parentGo = GameObject.Find(args.parentPath);
+                if (parentGo == null)
+                    return new McpToolError { error = $"Parent GameObject not found: {args.parentPath}" };
+                parentTransform = parentGo.transform;
+            }
+
+            Undo.SetTransformParent(childGo.transform, parentTransform, $"Set Parent of {childGo.name}");
+            return new { success = true, childPath = args.childPath, newParentPath = args.parentPath ?? "root" };
+        }
+
+        private static Type GetTypeByName(string className)
+        {
+            foreach (var assembly in AppDomain.CurrentDomain.GetAssemblies())
+            {
+                var type = assembly.GetType(className, false, true);
+                if (type != null) return type;
+            }
+            foreach (var assembly in AppDomain.CurrentDomain.GetAssemblies())
+            {
+                foreach (var t in assembly.GetTypes())
+                {
+                    if (t.Name.Equals(className, StringComparison.OrdinalIgnoreCase))
+                        return t;
+                }
+            }
+            return null;
+        }
+
         private static GameObjectInfo BuildHierarchy(GameObject go, int depth, int maxDepth, ref int nodeBudget)
         {
             nodeBudget--; // 이 노드 소비
@@ -240,6 +310,30 @@ namespace Community.Unity.MCP
             public string typeName;
             // [OPTIMIZED] fullTypeName 제거 - typeName만으로 충분
             public bool enabled;
+        }
+
+        [Serializable]
+        public class FindObjectsArgs
+        {
+            [McpParam("Name of the component (e.g. NavMeshAgent, EnemyController)", Required = true)] 
+            public string componentName;
+        }
+
+        [Serializable]
+        public class FindObjectsResult
+        {
+            public string componentName;
+            public int count;
+            public string[] paths;
+        }
+
+        [Serializable]
+        public class SetParentArgs
+        {
+            [McpParam("Path of the child GameObject to move", Required = true)] 
+            public string childPath;
+            [McpParam("Path of the new parent GameObject. Leave empty to move to root.")] 
+            public string parentPath;
         }
 
         #endregion

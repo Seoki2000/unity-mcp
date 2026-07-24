@@ -1,206 +1,101 @@
-# Unity MCP Server
+# Unity MCP Server 🚀
 
 [![Unity 2021.3+](https://img.shields.io/badge/Unity-2021.3%2B-blue.svg)](https://unity.com)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 [![MCP](https://img.shields.io/badge/MCP-Compatible-purple.svg)](https://modelcontextprotocol.io)
-[![Version](https://img.shields.io/badge/Version-2.2.0-orange.svg)](CHANGELOG.md)
 
-A **Model Context Protocol (MCP)** server for Unity that enables AI agents to **query and control** the Unity Editor.
+A **Model Context Protocol (MCP)** server for Unity that enables AI agents to **query and control** the Unity Editor. This local-optimized version is enhanced with additional tools for Behavior Trees, Window Management, and advanced GameObject/Hierarchy manipulation.
 
 ## What is MCP?
+MCP is an open standard by Anthropic that allows AI systems to access external tools and data. This package turns Unity into an MCP server, letting AI assistants like **Antigravity**, **Claude**, and **Cursor** seamlessly query your scenes, modify assets, and execute editor commands.
 
-MCP is an open standard by Anthropic that allows AI systems to access external tools and data. This package turns Unity into an MCP server, letting AI assistants like **Antigravity**, **Claude**, and **Cursor** query your scenes, assets, and execute editor commands.
+## Key Features
+- 🎮 **Scene & Hierarchy Control**: Create, modify, set parents, and find objects by component.
+- 🧩 **Component Management**: Add, remove, and deeply inspect serialized component properties.
+- 🌲 **Behavior Tree Tools (New)**: Manage Unity Behavior graphs (add/remove nodes, connect, set properties).
+- 🪟 **Window Management (New)**: Directly open Editor windows like Animator or Behavior graph.
+- 🎬 **Scene & Prefab Management**: Open, save scenes, instantiate and unpack prefabs.
+- 📦 **Asset & Resource Access**: Browse, move, duplicate, and read project assets.
+- ▶️ **Play Mode & Input**: Control play mode state and simulate inputs.
 
-## Features
+---
 
-- 🎮 **Scene Hierarchy** - Query GameObjects, components, and structure
-- ✏️ **Write Operations** - Create, delete, and modify GameObjects in real-time
-- 🧩 **Component Control** - Add, remove, and configure components
-- 🎬 **Scene Management** - Open, save, create, and manage scenes
-- 🏷️ **Prefab Tools** - Instantiate, create, and inspect prefabs
-- 📦 **Asset Browser** - List and search project assets
-- 📁 **Resource Access** - Read scripts, prefabs, and ScriptableObjects
-- 📋 **Console Access** - Read and clear Unity console logs
-- ⚙️ **Editor Control** - Execute menu items, select objects
-- 🔧 **Compilation Status** - Monitor build errors and warnings
-- 📷 **Screenshots** - Capture Game View or Scene View (v2.1)
-- 🔍 **Project Search** - Search by name, content, or references (v2.1)
-- ▶️ **Play Mode Control** - Enter/exit/pause play mode (v2.1)
-- 🎮 **Input Simulation** - Keyboard, mouse, and UI interactions (v2.1)
-- 📋 **Schema Support** - Full JSON Schema for all tool parameters (v2.1)
-- 🔒 **Secure** - Localhost only, no external access
-
-## Installation
-
-### Via Git URL (Recommended)
-
-1. Open `Window > Package Manager`
-2. Click `+` > `Add package from git URL...`
-3. Enter:
-   ```
+## Installation (Via Git URL)
+1. Open `Window > Package Manager` in Unity.
+2. Click the `+` icon in the top left and select `Add package from git URL...`.
+3. Enter the repository URL (or local path if you are using a local clone):
+   ```text
    https://github.com/usmanbutt-dev/unity-mcp.git
    ```
 
 ## Quick Start
+1. The server **auto-starts** when the Unity project is loaded.
+2. Navigate to `Window > MCP Server` to view the server status.
+3. Click **"Copy Config to Clipboard"**.
+4. Paste the configuration into your MCP client's configuration file (e.g., `mcp_config.json`).
 
-1. The server **auto-starts** when Unity loads
-2. Open `Window > MCP Server` to view status
-3. Click **"Copy Config to Clipboard"**
-4. Paste into your MCP client's configuration file
+---
 
-## Available Tools (52 Total)
+## Available Tools (Expanded)
 
-### GameObject Tools
+### 🧩 GameObject & Component Tools
 | Tool | Description |
 |------|-------------|
-| `unity_create_gameobject` | Create new GameObjects (primitives supported) |
-| `unity_delete_gameobject` | Delete GameObjects from scene |
-| `unity_set_transform` | Set position, rotation, scale |
-| `unity_add_component` | Add components to GameObjects |
-| `unity_remove_component` | Remove components |
-| `unity_set_component_property` | Set component property values |
+| `unity_create_gameobject` | Create new GameObjects (primitives supported). |
+| `unity_delete_gameobject` | Delete GameObjects from the scene. |
+| `unity_set_transform` | Modify position, rotation, and scale. |
+| `unity_add_component` | Add a component to a GameObject. |
+| `unity_remove_component` | Remove a component from a GameObject. |
+| `unity_set_component_property` | Set a specific component property value. |
+| `unity_get_component_properties` | **[NEW]** Get all serialized properties and values of a component. |
 
-### Hierarchy Tools
+### 🌲 Hierarchy Tools
 | Tool | Description |
 |------|-------------|
-| `unity_get_hierarchy` | Get scene GameObject hierarchy |
-| `unity_get_gameobject` | Get details of a specific GameObject |
-| `unity_get_components` | List components on a GameObject |
+| `unity_get_hierarchy` | Retrieve the scene's GameObject hierarchy. |
+| `unity_get_gameobject` | Get details of a specific GameObject. |
+| `unity_get_components` | List components attached to a GameObject. |
+| `unity_find_objects_by_component`| **[NEW]** Find all GameObjects in the active scene that have a specific component. |
+| `unity_set_object_parent` | **[NEW]** Reparent a GameObject to another GameObject. |
 
-### Prefab Tools
+### 🧠 Behavior Tree Tools (NEW)
 | Tool | Description |
 |------|-------------|
-| `unity_instantiate_prefab` | Instantiate prefabs in scene |
-| `unity_get_prefab_info` | Get prefab structure |
-| `unity_create_prefab` | Create prefab from GameObject |
-| `unity_unpack_prefab` | Unpack prefab instances |
+| `unity_get_bt_graph` | Get details of a Behavior Graph (nodes, edges, blackboard). |
+| `unity_add_bt_node` | Add a new node to a Behavior Graph. |
+| `unity_remove_bt_node` | Remove a node from a Behavior Graph. |
+| `unity_connect_bt_nodes` | Connect two nodes in a Behavior Graph. |
+| `unity_set_bt_node_property`| Set a property value on a Behavior Graph node. |
 
-### Scene Tools
+### 🪟 Window Management (NEW)
 | Tool | Description |
 |------|-------------|
-| `unity_get_scenes` | List all scenes in project |
-| `unity_open_scene` | Open a scene |
-| `unity_save_scene` | Save current scene |
-| `unity_new_scene` | Create new scene |
-| `unity_close_scene` | Close a scene |
-| `unity_set_active_scene` | Set active scene |
+| `unity_open_animator_window`| Open the Animator window in the Unity Editor. |
+| `unity_open_bt_window` | Open the Unity Behavior (BT) window. |
 
-### Asset & Editor Tools
+### 🏃 Animation Tools
 | Tool | Description |
 |------|-------------|
-| `unity_get_assets` | List assets in a folder |
-| `unity_get_project_settings` | Get project configuration |
-| `unity_get_console_logs` | Get recent console logs |
-| `unity_clear_console` | Clear the console |
-| `unity_execute_menu` | Execute a menu item |
-| `unity_select_object` | Select a GameObject |
-| `unity_get_selection` | Get current selection |
-| `unity_get_editor_state` | Get editor play/pause state |
+| `unity_set_animator_parameter`| Set bool/float/int/trigger parameters. |
+| `unity_get_animator_info` | Get animator state, parameters, and layers. |
+| `unity_play_animation` | Play animation state by name. |
+| `unity_set_animator_culling_mode`| **[NEW]** Set the culling mode of an Animator. |
 
-### Compilation Tools
-| Tool | Description |
-|------|-------------|
-| `unity_get_compilation_status` | Get compile errors/warnings |
-| `unity_recompile_scripts` | Force recompilation |
-| `unity_get_assemblies` | List project assemblies |
+*(Other standard tools for Play Mode, Scene Management, Physics, Assets, Materials, and Shaders are fully supported as part of the core MCP feature set!)*
 
-### Screenshot & Search Tools (v2.1)
-| Tool | Description |
-|------|-------------|
-| `unity_take_screenshot` | Capture Game View or Scene View as base64 PNG |
-| `unity_search_project` | Search by name, content, or asset references |
+---
 
-### Play Mode & Input Tools (v2.1)
-| Tool | Description |
-|------|-------------|
-| `unity_enter_play_mode` | Enter play mode |
-| `unity_exit_play_mode` | Exit play mode |
-| `unity_pause_play_mode` | Pause/unpause play mode |
-| `unity_simulate_key` | Simulate keyboard input |
-| `unity_simulate_mouse` | Simulate mouse clicks |
-| `unity_click_ui_element` | Click UI buttons/toggles by name |
-
-### Animation Tools (v2.2)
-| Tool | Description |
-|------|-------------|
-| `unity_set_animator_parameter` | Set bool/float/int/trigger parameters |
-| `unity_get_animator_info` | Get animator state, parameters, layers |
-| `unity_play_animation` | Play animation state by name |
-
-### Material & Shader Tools (v2.2)
-| Tool | Description |
-|------|-------------|
-| `unity_get_material_info` | Get material properties and shader |
-| `unity_set_material_property` | Set color/float/int/vector properties |
-| `unity_set_material` | Assign material to renderer |
-
-### Physics Tools (v2.2)
-| Tool | Description |
-|------|-------------|
-| `unity_raycast` | Cast ray and get hit info |
-| `unity_overlap_sphere` | Find colliders in radius |
-| `unity_add_force` | Apply force to Rigidbody |
-
-### Asset Creation Tools (v2.2)
-| Tool | Description |
-|------|-------------|
-| `unity_create_folder` | Create project folders |
-| `unity_create_material` | Create material assets |
-| `unity_create_script` | Create C# scripts with templates |
-| `unity_move_asset` | Move/rename assets |
-| `unity_duplicate_asset` | Duplicate assets |
-
-### AI Context Tools (v2.2)
-| Tool | Description |
-|------|-------------|
-| `unity_get_scene_summary` | Compact scene overview for AI |
-| `unity_get_component_schema` | Get component properties schema |
-| `unity_get_type_info` | Discover Unity component types |
-
-## MCP Resources
-
-The server also provides resource access via MCP resources protocol:
-- **Scripts** - Read C# source files
-- **Scenes** - Get scene metadata
-- **Prefabs** - Read prefab structure
-- **ScriptableObjects** - Read SO data as JSON
-
-## MCP Client Configuration
-
-Add to your MCP client config (e.g., `mcp_config.json`):
-
-```json
-{
-  "mcpServers": {
-    "unity": {
-      "command": "node",
-      "args": ["path/to/Packages/com.community.unity-mcp/Bridge/mcp-bridge.js"]
-    }
-  }
-}
-```
-
-> **Note**: Use the "Copy Config to Clipboard" button in `Window > MCP Server` to get the correct path.
-
-## Example Queries
-
-Once connected, ask your AI assistant:
-- "Create a red cube at position (0, 2, 0)"
-- "Add a Rigidbody to the Player object"
-- "What GameObjects are in my current scene?"
-- "Show me the components on the Player object"
-- "Open the MainMenu scene"
-- "What compilation errors do I have?"
+## Example Prompts for AI
+Once connected, try asking your AI assistant:
+- *"Find all GameObjects with the `EnemyController` component."*
+- *"Open the Behavior Tree window."*
+- *"Set the parent of `Weapon` to `Player/RightHand`."*
+- *"Get all component properties for the `Rigidbody` on the Player."*
+- *"Create a red cube at position (0, 2, 0)."*
 
 ## Requirements
-
 - Unity 2021.3 or later
-- Node.js (for the MCP bridge)
-
-## Related Packages
-
-- [Antigravity IDE Support](https://github.com/usmanbutt-dev/antigravity-unity) - IDE integration for Unity
+- Node.js (Required for the MCP bridge `mcp-bridge.js`)
 
 ## License
-
 MIT License - see [LICENSE](LICENSE)
