@@ -11,44 +11,97 @@ namespace Community.Unity.MCP
     [McpToolProvider]
     public class ScreenshotTools
     {
+        // [ADDED] 페이로드 상한 — MCP 클라이언트/전송 구간 부담을 줄이기 위한 안전장치.
+        private const int MaxScreenshotDimension = 1280; // 긴 변 기준
+        private const int MaxBase64Length = 2 * 1024 * 1024; // 2MB
+
         [McpTool("unity_take_screenshot", "Capture a screenshot of the Game View or Scene View", typeof(TakeScreenshotArgs))]
         public static object TakeScreenshot(string argsJson)
         {
             var args = JsonUtility.FromJson<TakeScreenshotArgs>(argsJson);
-            
+
             string viewType = string.IsNullOrEmpty(args?.view) ? "game" : args.view.ToLower();
             int width = args?.width > 0 ? args.width : 1280;
             int height = args?.height > 0 ? args.height : 720;
-            
+
+            ClampToMaxDimension(ref width, ref height, MaxScreenshotDimension);
+
+            var attempt = CaptureAndEncode(viewType, width, height);
+            if (attempt.error != null)
+            {
+                return new McpToolError { error = attempt.error };
+            }
+
+            if (attempt.base64.Length > MaxBase64Length)
+            {
+                // 2MB 초과 — 절반 해상도로 1회만 재시도(무한 재귀 방지).
+                int halfWidth = Math.Max(64, width / 2);
+                int halfHeight = Math.Max(64, height / 2);
+                var retryAttempt = CaptureAndEncode(viewType, halfWidth, halfHeight);
+
+                if (retryAttempt.error == null && retryAttempt.base64.Length <= MaxBase64Length)
+                {
+                    return new TakeScreenshotResult
+                    {
+                        success = true,
+                        view = viewType,
+                        width = retryAttempt.width,
+                        height = retryAttempt.height,
+                        format = "png",
+                        base64 = retryAttempt.base64,
+                        sizeBytes = retryAttempt.sizeBytes
+                    };
+                }
+
+                return new McpToolError
+                {
+                    error = "Screenshot payload too large even after halving resolution",
+                    detail = $"Request an explicit smaller width/height (e.g., {Math.Max(32, halfWidth / 2)}x{Math.Max(32, halfHeight / 2)}) or capture view='game' with a smaller viewport."
+                };
+            }
+
+            return new TakeScreenshotResult
+            {
+                success = true,
+                view = viewType,
+                width = attempt.width,
+                height = attempt.height,
+                format = "png",
+                base64 = attempt.base64,
+                sizeBytes = attempt.sizeBytes
+            };
+        }
+
+        private struct CaptureAttempt
+        {
+            public string error;
+            public int width;
+            public int height;
+            public string base64;
+            public int sizeBytes;
+        }
+
+        private static CaptureAttempt CaptureAndEncode(string viewType, int width, int height)
+        {
             Texture2D screenshot = null;
-            
+
             try
             {
-                if (viewType == "scene")
-                {
-                    screenshot = CaptureSceneView(width, height);
-                }
-                else
-                {
-                    screenshot = CaptureGameView(width, height);
-                }
-                
+                screenshot = viewType == "scene" ? CaptureSceneView(width, height) : CaptureGameView(width, height);
+
                 if (screenshot == null)
                 {
-                    return new { error = $"Failed to capture {viewType} view. Make sure the view is open." };
+                    return new CaptureAttempt { error = $"Failed to capture {viewType} view. Make sure the view is open." };
                 }
-                
+
                 // Encode to PNG and convert to base64
                 byte[] pngData = screenshot.EncodeToPNG();
                 string base64 = Convert.ToBase64String(pngData);
-                
-                return new TakeScreenshotResult
+
+                return new CaptureAttempt
                 {
-                    success = true,
-                    view = viewType,
                     width = screenshot.width,
                     height = screenshot.height,
-                    format = "png",
                     base64 = base64,
                     sizeBytes = pngData.Length
                 };
@@ -60,6 +113,16 @@ namespace Community.Unity.MCP
                     UnityEngine.Object.DestroyImmediate(screenshot);
                 }
             }
+        }
+
+        private static void ClampToMaxDimension(ref int width, ref int height, int maxDimension)
+        {
+            int longSide = Math.Max(width, height);
+            if (longSide <= maxDimension) return;
+
+            float scale = (float)maxDimension / longSide;
+            width = Math.Max(1, Mathf.RoundToInt(width * scale));
+            height = Math.Max(1, Mathf.RoundToInt(height * scale));
         }
 
         private static Texture2D CaptureGameView(int width, int height)

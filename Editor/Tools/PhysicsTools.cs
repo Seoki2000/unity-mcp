@@ -17,9 +17,9 @@ namespace Community.Unity.MCP
             var args = JsonUtility.FromJson<RaycastArgs>(argsJson);
             
             if (args?.origin == null)
-                return new { error = "origin parameter is required" };
+                return new McpToolError { error = "origin parameter is required" };
             if (args?.direction == null)
-                return new { error = "direction parameter is required" };
+                return new McpToolError { error = "direction parameter is required" };
             
             Vector3 origin = new Vector3(args.origin.x, args.origin.y, args.origin.z);
             Vector3 direction = new Vector3(args.direction.x, args.direction.y, args.direction.z).normalized;
@@ -70,7 +70,7 @@ namespace Community.Unity.MCP
             var args = JsonUtility.FromJson<OverlapSphereArgs>(argsJson);
             
             if (args?.center == null)
-                return new { error = "center parameter is required" };
+                return new McpToolError { error = "center parameter is required" };
             
             float radius = args.radius > 0 ? args.radius : 1f;
             Vector3 center = new Vector3(args.center.x, args.center.y, args.center.z);
@@ -117,20 +117,20 @@ namespace Community.Unity.MCP
             var args = JsonUtility.FromJson<AddForceArgs>(argsJson);
             
             if (string.IsNullOrEmpty(args?.path))
-                return new { error = "path parameter is required" };
+                return new McpToolError { error = "path parameter is required" };
             if (args?.force == null)
-                return new { error = "force parameter is required" };
+                return new McpToolError { error = "force parameter is required" };
             
             if (!EditorApplication.isPlaying)
-                return new { error = "AddForce only works in Play Mode" };
+                return new McpToolError { error = "AddForce only works in Play Mode" };
             
             var go = GameObject.Find(args.path);
             if (go == null)
-                return new { error = $"GameObject not found: {args.path}" };
+                return new McpToolError { error = $"GameObject not found: {args.path}" };
             
             var rb = go.GetComponent<Rigidbody>();
             if (rb == null)
-                return new { error = $"No Rigidbody component on: {args.path}" };
+                return new McpToolError { error = $"No Rigidbody component on: {args.path}" };
             
             Vector3 force = new Vector3(args.force.x, args.force.y, args.force.z);
             
@@ -139,7 +139,7 @@ namespace Community.Unity.MCP
             {
                 if (!Enum.TryParse(args.forceMode, true, out mode))
                 {
-                    return new { error = $"Invalid force mode: {args.forceMode}. Use: Force, Acceleration, Impulse, VelocityChange" };
+                    return new McpToolError { error = $"Invalid force mode: {args.forceMode}. Use: Force, Acceleration, Impulse, VelocityChange" };
                 }
             }
             

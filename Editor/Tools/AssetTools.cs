@@ -25,7 +25,7 @@ namespace Community.Unity.MCP
 
             if (!AssetDatabase.IsValidFolder(folderPath))
             {
-                return new { error = $"Invalid folder path: {folderPath}" };
+                return new McpToolError { error = $"Invalid folder path: {folderPath}" };
             }
 
             var guids = AssetDatabase.FindAssets(filter, new[] { folderPath });

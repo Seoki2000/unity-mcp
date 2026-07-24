@@ -18,14 +18,14 @@ namespace Community.Unity.MCP
             
             if (string.IsNullOrEmpty(args?.prefabPath))
             {
-                return new { error = "prefabPath parameter is required" };
+                return new McpToolError { error = "prefabPath parameter is required" };
             }
             
             // Load the prefab
             var prefab = AssetDatabase.LoadAssetAtPath<GameObject>(args.prefabPath);
             if (prefab == null)
             {
-                return new { error = $"Prefab not found: {args.prefabPath}" };
+                return new McpToolError { error = $"Prefab not found: {args.prefabPath}" };
             }
             
             // Instantiate
@@ -85,13 +85,13 @@ namespace Community.Unity.MCP
             
             if (string.IsNullOrEmpty(args?.prefabPath))
             {
-                return new { error = "prefabPath parameter is required" };
+                return new McpToolError { error = "prefabPath parameter is required" };
             }
             
             var prefab = AssetDatabase.LoadAssetAtPath<GameObject>(args.prefabPath);
             if (prefab == null)
             {
-                return new { error = $"Prefab not found: {args.prefabPath}" };
+                return new McpToolError { error = $"Prefab not found: {args.prefabPath}" };
             }
             
             var info = BuildPrefabInfo(prefab, 0, 5);
@@ -108,17 +108,17 @@ namespace Community.Unity.MCP
             
             if (string.IsNullOrEmpty(args?.gameObjectPath))
             {
-                return new { error = "gameObjectPath parameter is required" };
+                return new McpToolError { error = "gameObjectPath parameter is required" };
             }
             if (string.IsNullOrEmpty(args?.savePath))
             {
-                return new { error = "savePath parameter is required (e.g., Assets/Prefabs/MyPrefab.prefab)" };
+                return new McpToolError { error = "savePath parameter is required (e.g., Assets/Prefabs/MyPrefab.prefab)" };
             }
             
             var go = GameObject.Find(args.gameObjectPath);
             if (go == null)
             {
-                return new { error = $"GameObject not found: {args.gameObjectPath}" };
+                return new McpToolError { error = $"GameObject not found: {args.gameObjectPath}" };
             }
             
             // Ensure directory exists
@@ -145,7 +145,7 @@ namespace Community.Unity.MCP
             
             if (!success || prefab == null)
             {
-                return new { error = $"Failed to create prefab at: {args.savePath}" };
+                return new McpToolError { error = $"Failed to create prefab at: {args.savePath}" };
             }
             
             return new CreatePrefabResult
@@ -163,18 +163,18 @@ namespace Community.Unity.MCP
             
             if (string.IsNullOrEmpty(args?.path))
             {
-                return new { error = "path parameter is required" };
+                return new McpToolError { error = "path parameter is required" };
             }
             
             var go = GameObject.Find(args.path);
             if (go == null)
             {
-                return new { error = $"GameObject not found: {args.path}" };
+                return new McpToolError { error = $"GameObject not found: {args.path}" };
             }
             
             if (!PrefabUtility.IsPartOfPrefabInstance(go))
             {
-                return new { error = $"GameObject is not a prefab instance: {args.path}" };
+                return new McpToolError { error = $"GameObject is not a prefab instance: {args.path}" };
             }
             
             var mode = args.completely 

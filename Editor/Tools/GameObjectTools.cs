@@ -30,7 +30,7 @@ namespace Community.Unity.MCP
                 }
                 else
                 {
-                    return new { error = $"Invalid primitive type: {args.primitiveType}. Valid types: Cube, Sphere, Capsule, Cylinder, Plane, Quad" };
+                    return new McpToolError { error = $"Invalid primitive type: {args.primitiveType}. Valid types: Cube, Sphere, Capsule, Cylinder, Plane, Quad" };
                 }
             }
             else
@@ -48,7 +48,7 @@ namespace Community.Unity.MCP
                 }
                 else
                 {
-                    return new { error = $"Parent not found: {args.parentPath}", gameObjectCreated = true, name = go.name };
+                    return new CreateGameObjectParentError { error = $"Parent not found: {args.parentPath}", gameObjectCreated = true, name = go.name };
                 }
             }
             // Set transform if specified
@@ -91,13 +91,13 @@ namespace Community.Unity.MCP
             
             if (string.IsNullOrEmpty(args?.path))
             {
-                return new { error = "path parameter is required" };
+                return new McpToolError { error = "path parameter is required" };
             }
             
             var go = GameObject.Find(args.path);
             if (go == null)
             {
-                return new { error = $"GameObject not found: {args.path}" };
+                return new McpToolError { error = $"GameObject not found: {args.path}" };
             }
             
             string deletedName = go.name;
@@ -121,13 +121,13 @@ namespace Community.Unity.MCP
             
             if (string.IsNullOrEmpty(args?.path))
             {
-                return new { error = "path parameter is required" };
+                return new McpToolError { error = "path parameter is required" };
             }
             
             var go = GameObject.Find(args.path);
             if (go == null)
             {
-                return new { error = $"GameObject not found: {args.path}" };
+                return new McpToolError { error = $"GameObject not found: {args.path}" };
             }
             
             Undo.RecordObject(go.transform, $"Set Transform {go.name}");
@@ -177,31 +177,31 @@ namespace Community.Unity.MCP
             
             if (string.IsNullOrEmpty(args?.path))
             {
-                return new { error = "path parameter is required" };
+                return new McpToolError { error = "path parameter is required" };
             }
             if (string.IsNullOrEmpty(args?.componentType))
             {
-                return new { error = "componentType parameter is required" };
+                return new McpToolError { error = "componentType parameter is required" };
             }
             
             var go = GameObject.Find(args.path);
             if (go == null)
             {
-                return new { error = $"GameObject not found: {args.path}" };
+                return new McpToolError { error = $"GameObject not found: {args.path}" };
             }
             
             // Try to find the type
             Type componentType = FindComponentType(args.componentType);
             if (componentType == null)
             {
-                return new { error = $"Component type not found: {args.componentType}. Try using full type name like 'UnityEngine.Rigidbody'" };
+                return new McpToolError { error = $"Component type not found: {args.componentType}. Try using full type name like 'UnityEngine.Rigidbody'" };
             }
             
             // Check if component already exists (for non-multi components)
             var existing = go.GetComponent(componentType);
             if (existing != null && !AllowsMultiple(componentType))
             {
-                return new { error = $"GameObject already has component: {args.componentType}", alreadyExists = true };
+                return new AddComponentExistsError { error = $"GameObject already has component: {args.componentType}", alreadyExists = true };
             }
             
             // Add the component
@@ -223,35 +223,35 @@ namespace Community.Unity.MCP
             
             if (string.IsNullOrEmpty(args?.path))
             {
-                return new { error = "path parameter is required" };
+                return new McpToolError { error = "path parameter is required" };
             }
             if (string.IsNullOrEmpty(args?.componentType))
             {
-                return new { error = "componentType parameter is required" };
+                return new McpToolError { error = "componentType parameter is required" };
             }
             
             var go = GameObject.Find(args.path);
             if (go == null)
             {
-                return new { error = $"GameObject not found: {args.path}" };
+                return new McpToolError { error = $"GameObject not found: {args.path}" };
             }
             
             Type componentType = FindComponentType(args.componentType);
             if (componentType == null)
             {
-                return new { error = $"Component type not found: {args.componentType}" };
+                return new McpToolError { error = $"Component type not found: {args.componentType}" };
             }
             
             var component = go.GetComponent(componentType);
             if (component == null)
             {
-                return new { error = $"Component not found on GameObject: {args.componentType}" };
+                return new McpToolError { error = $"Component not found on GameObject: {args.componentType}" };
             }
             
             // Can't remove Transform
             if (componentType == typeof(Transform))
             {
-                return new { error = "Cannot remove Transform component" };
+                return new McpToolError { error = "Cannot remove Transform component" };
             }
             
             Undo.DestroyObjectImmediate(component);
@@ -270,50 +270,123 @@ namespace Community.Unity.MCP
             var args = JsonUtility.FromJson<SetPropertyArgs>(argsJson);
             
             if (string.IsNullOrEmpty(args?.path))
-                return new { error = "path parameter is required" };
+                return new McpToolError { error = "path parameter is required" };
             if (string.IsNullOrEmpty(args?.componentType))
-                return new { error = "componentType parameter is required" };
+                return new McpToolError { error = "componentType parameter is required" };
             if (string.IsNullOrEmpty(args?.propertyName))
-                return new { error = "propertyName parameter is required" };
+                return new McpToolError { error = "propertyName parameter is required" };
             
             var go = GameObject.Find(args.path);
             if (go == null)
-                return new { error = $"GameObject not found: {args.path}" };
+                return new McpToolError { error = $"GameObject not found: {args.path}" };
             
             Type componentType = FindComponentType(args.componentType);
             if (componentType == null)
-                return new { error = $"Component type not found: {args.componentType}" };
+                return new McpToolError { error = $"Component type not found: {args.componentType}" };
             
-            var component = go.GetComponent(componentType);
-            if (component == null)
-                return new { error = $"Component not found on GameObject: {args.componentType}" };
+            var comp = go.GetComponent(componentType);
+            if (comp == null)
+                return new McpToolError { error = $"Component {args.componentType} not found on GameObject" };
             
-            // Use SerializedObject for undo support
-            var serializedObject = new SerializedObject(component);
+            var serializedObject = new SerializedObject(comp);
             var property = serializedObject.FindProperty(args.propertyName);
             
             if (property == null)
-            {
-                return new { error = $"Property not found: {args.propertyName}" };
-            }
+                return new McpToolError { error = $"Property {args.propertyName} not found on component {args.componentType}" };
             
             try
             {
-                SetSerializedPropertyValue(property, args.value);
+                // Simple parsing for basic types
+                if (property.propertyType == SerializedPropertyType.Integer && int.TryParse(args.value, out int intVal))
+                    property.intValue = intVal;
+                else if (property.propertyType == SerializedPropertyType.Float && float.TryParse(args.value, out float floatVal))
+                    property.floatValue = floatVal;
+                else if (property.propertyType == SerializedPropertyType.Boolean && bool.TryParse(args.value, out bool boolVal))
+                    property.boolValue = boolVal;
+                else if (property.propertyType == SerializedPropertyType.String)
+                    property.stringValue = args.value;
+                else
+                    return new McpToolError { error = $"Unsupported property type for string assignment: {property.propertyType}" };
+                
                 serializedObject.ApplyModifiedProperties();
                 
                 return new SetPropertyResult
                 {
                     success = true,
                     path = args.path,
-                    componentType = args.componentType,
+                    componentType = componentType.Name,
                     propertyName = args.propertyName,
                     newValue = args.value
                 };
             }
             catch (Exception ex)
             {
-                return new { error = $"Failed to set property: {ex.Message}" };
+                return new McpToolError { error = $"Failed to set property: {ex.Message}" };
+            }
+        }
+
+        [McpTool("unity_get_component_properties", "Get the serialized properties of a component", typeof(GetComponentPropertiesArgs))]
+        public static object GetComponentProperties(string argsJson)
+        {
+            var args = JsonUtility.FromJson<GetComponentPropertiesArgs>(argsJson);
+            if (string.IsNullOrEmpty(args?.path))
+                return new McpToolError { error = "path parameter is required" };
+            if (string.IsNullOrEmpty(args?.componentType))
+                return new McpToolError { error = "componentType parameter is required" };
+
+            var go = GameObject.Find(args.path);
+            if (go == null)
+                return new McpToolError { error = $"GameObject not found: {args.path}" };
+
+            var compType = FindComponentType(args.componentType);
+            if (compType == null)
+                return new McpToolError { error = $"Component type not found: {args.componentType}" };
+
+            var comp = go.GetComponent(compType);
+            if (comp == null)
+                return new McpToolError { error = $"Component {args.componentType} not found on {args.path}" };
+
+            var serializedObj = new SerializedObject(comp);
+            var prop = serializedObj.GetIterator();
+            var properties = new List<ComponentPropertyInfo>();
+
+            if (prop.NextVisible(true))
+            {
+                do
+                {
+                    if (prop.name == "m_Script") continue;
+
+                    properties.Add(new ComponentPropertyInfo
+                    {
+                        name = prop.name,
+                        type = prop.propertyType.ToString(),
+                        value = GetSerializedPropertyValue(prop)
+                    });
+                } while (prop.NextVisible(false));
+            }
+
+            return new ComponentPropertiesResult
+            {
+                gameObjectPath = args.path,
+                componentType = compType.Name,
+                properties = properties.ToArray()
+            };
+        }
+
+        private static string GetSerializedPropertyValue(SerializedProperty prop)
+        {
+            switch (prop.propertyType)
+            {
+                case SerializedPropertyType.Integer: return prop.intValue.ToString();
+                case SerializedPropertyType.Boolean: return prop.boolValue.ToString();
+                case SerializedPropertyType.Float: return prop.floatValue.ToString();
+                case SerializedPropertyType.String: return prop.stringValue;
+                case SerializedPropertyType.Color: return prop.colorValue.ToString();
+                case SerializedPropertyType.ObjectReference: return prop.objectReferenceValue != null ? prop.objectReferenceValue.name : "null";
+                case SerializedPropertyType.Vector2: return prop.vector2Value.ToString();
+                case SerializedPropertyType.Vector3: return prop.vector3Value.ToString();
+                case SerializedPropertyType.Enum: return prop.enumNames.Length > prop.enumValueIndex && prop.enumValueIndex >= 0 ? prop.enumNames[prop.enumValueIndex] : prop.enumValueIndex.ToString();
+                default: return "UnsupportedType: " + prop.propertyType.ToString();
             }
         }
 
@@ -458,6 +531,13 @@ namespace Community.Unity.MCP
         }
 
         [Serializable]
+        public class CreateGameObjectParentError : McpToolError
+        {
+            public bool gameObjectCreated;
+            public string name;
+        }
+
+        [Serializable]
         public class DeleteGameObjectArgs
         {
             [McpParam("Path to the GameObject to delete", Required = true)] public string path;
@@ -509,6 +589,12 @@ namespace Community.Unity.MCP
         }
 
         [Serializable]
+        public class AddComponentExistsError : McpToolError
+        {
+            public bool alreadyExists;
+        }
+
+        [Serializable]
         public class RemoveComponentArgs
         {
             [McpParam("Path to the GameObject", Required = true)] public string path;
@@ -540,6 +626,29 @@ namespace Community.Unity.MCP
             public string componentType;
             public string propertyName;
             public string newValue;
+        }
+
+        [Serializable]
+        public class GetComponentPropertiesArgs
+        {
+            [McpParam("Path to the GameObject", Required = true)] public string path;
+            [McpParam("Type name of the component", Required = true)] public string componentType;
+        }
+
+        [Serializable]
+        public class ComponentPropertyInfo
+        {
+            public string name;
+            public string type;
+            public string value;
+        }
+
+        [Serializable]
+        public class ComponentPropertiesResult
+        {
+            public string gameObjectPath;
+            public string componentType;
+            public ComponentPropertyInfo[] properties;
         }
 
         #endregion

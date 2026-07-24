@@ -17,7 +17,7 @@ namespace Community.Unity.MCP
             
             if (string.IsNullOrEmpty(args?.menuPath))
             {
-                return new { error = "menuPath parameter is required" };
+                return new McpToolError { error = "menuPath parameter is required" };
             }
 
             var result = EditorApplication.ExecuteMenuItem(args.menuPath);
@@ -33,16 +33,16 @@ namespace Community.Unity.MCP
         public static object SelectObject(string argsJson)
         {
             var args = JsonUtility.FromJson<SelectObjectArgs>(argsJson);
-            
+
             if (string.IsNullOrEmpty(args?.path))
             {
-                return new { error = "path parameter is required" };
+                return new McpToolError { error = "path parameter is required" };
             }
 
             var go = GameObject.Find(args.path);
             if (go == null)
             {
-                return new { error = $"GameObject not found: {args.path}", success = false };
+                return new SelectObjectErrorResult { error = $"GameObject not found: {args.path}", success = false };
             }
 
             Selection.activeGameObject = go;
@@ -87,27 +87,50 @@ namespace Community.Unity.MCP
             };
         }
 
+        private const string DomainReloadNote = "Domain reload will briefly disconnect the bridge; poll unity_get_editor_state to confirm.";
+
         [McpTool("unity_enter_play_mode", "Enter play mode")]
         public static object EnterPlayMode(string argsJson)
         {
             if (EditorApplication.isPlaying)
             {
-                return new { error = "Already in play mode", isPlaying = true };
+                return new PlayModeErrorResult { error = "Already in play mode", isPlaying = true };
             }
-            
+
             if (EditorApplication.isCompiling)
             {
-                return new { error = "Cannot enter play mode while compiling" };
+                return new McpToolError { error = "Cannot enter play mode while compiling" };
             }
-            
-            EditorApplication.isPlaying = true;
-            
+
+            // 잡 생성 → 즉시 접수 응답. 실제 전환(isPlaying=true)은 응답이 POST로 flush된 다음 update 틱에서 —
+            // 도메인 리로드가 응답 전에 시작돼 브릿지가 끊기는 것을 피한다.
+            // (delayCall 금지: 미포커스 에디터에서 무기한 기아 — McpEditorDispatch 주석 참조)
+            string jobId = McpJobStore.CreateJob("unity_enter_play_mode");
+
+            McpEditorDispatch.RunOnNextEditorUpdate(() =>
+            {
+                try
+                {
+                    McpJobStore.Update(jobId, McpJobStore.StatusRunning, null, null);
+                    if (!EditorApplication.isPlaying) EditorApplication.isPlaying = true;
+                }
+                catch (Exception ex)
+                {
+                    McpJobStore.Update(jobId, McpJobStore.StatusFailed, null, ex.Message);
+                }
+            });
+
+            // 이 시점 isPlaying은 아직 false(전환 전) — 조기에 true로 단정하지 않고 실제 값을 그대로 보고한다.
             return new PlayModeResult
             {
                 success = true,
                 action = "enter",
-                isPlaying = true,
-                isPaused = false
+                isPlaying = EditorApplication.isPlaying,
+                isPaused = false,
+                accepted = true,
+                transition = "starting",
+                note = DomainReloadNote,
+                jobId = jobId
             };
         }
 
@@ -116,17 +139,36 @@ namespace Community.Unity.MCP
         {
             if (!EditorApplication.isPlaying)
             {
-                return new { error = "Not in play mode", isPlaying = false };
+                return new PlayModeErrorResult { error = "Not in play mode", isPlaying = false };
             }
-            
-            EditorApplication.isPlaying = false;
-            
+
+            // 잡 생성 → 즉시 접수 응답. 실제 전환(isPlaying=false)은 다음 update 틱에서 — 리로드 전에 응답 flush 보장.
+            // (delayCall 금지: 미포커스 에디터에서 무기한 기아 — McpEditorDispatch 주석 참조)
+            string jobId = McpJobStore.CreateJob("unity_exit_play_mode");
+
+            McpEditorDispatch.RunOnNextEditorUpdate(() =>
+            {
+                try
+                {
+                    McpJobStore.Update(jobId, McpJobStore.StatusRunning, null, null);
+                    if (EditorApplication.isPlaying) EditorApplication.isPlaying = false;
+                }
+                catch (Exception ex)
+                {
+                    McpJobStore.Update(jobId, McpJobStore.StatusFailed, null, ex.Message);
+                }
+            });
+
             return new PlayModeResult
             {
                 success = true,
                 action = "exit",
-                isPlaying = false,
-                isPaused = false
+                isPlaying = EditorApplication.isPlaying,
+                isPaused = false,
+                accepted = true,
+                transition = "stopping",
+                note = DomainReloadNote,
+                jobId = jobId
             };
         }
 
@@ -134,22 +176,24 @@ namespace Community.Unity.MCP
         public static object PausePlayMode(string argsJson)
         {
             var args = JsonUtility.FromJson<PausePlayModeArgs>(argsJson);
-            
+
             if (!EditorApplication.isPlaying)
             {
-                return new { error = "Not in play mode", isPlaying = false };
+                return new PlayModeErrorResult { error = "Not in play mode", isPlaying = false };
             }
-            
+
             // Toggle or set specific state
             bool newState = args?.pause ?? !EditorApplication.isPaused;
             EditorApplication.isPaused = newState;
-            
+
+            // Pause/unpause는 도메인 리로드가 없는 동기 처리라 isPlaying은 항상 true로 확정적이다.
             return new PlayModeResult
             {
                 success = true,
                 action = newState ? "pause" : "unpause",
                 isPlaying = true,
-                isPaused = newState
+                isPaused = newState,
+                accepted = true
             };
         }
 
@@ -194,6 +238,12 @@ namespace Community.Unity.MCP
         }
 
         [Serializable]
+        public class SelectObjectErrorResult : McpToolError
+        {
+            public bool success;
+        }
+
+        [Serializable]
         public class SelectionResult
         {
             public int count;
@@ -218,6 +268,18 @@ namespace Community.Unity.MCP
             public string action;
             public bool isPlaying;
             public bool isPaused;
+            // [ADDED] enter/exit 응답을 정직하게 만들기 위한 필드 — 전환 중임을 명시.
+            public bool accepted;
+            public string transition;
+            public string note;
+            // [ADDED] 리로드 생존 폴링용 — enter/exit는 이 jobId로 완료를 확인(pause/unpause는 빈 문자열).
+            public string jobId;
+        }
+
+        [Serializable]
+        public class PlayModeErrorResult : McpToolError
+        {
+            public bool isPlaying;
         }
 
         [Serializable]

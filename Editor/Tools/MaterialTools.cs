@@ -17,23 +17,23 @@ namespace Community.Unity.MCP
             var args = JsonUtility.FromJson<GetMaterialInfoArgs>(argsJson);
             
             if (string.IsNullOrEmpty(args?.path))
-                return new { error = "path parameter is required" };
+                return new McpToolError { error = "path parameter is required" };
             
             var go = GameObject.Find(args.path);
             if (go == null)
-                return new { error = $"GameObject not found: {args.path}" };
+                return new McpToolError { error = $"GameObject not found: {args.path}" };
             
             var renderer = go.GetComponent<Renderer>();
             if (renderer == null)
-                return new { error = $"No Renderer component on: {args.path}" };
+                return new McpToolError { error = $"No Renderer component on: {args.path}" };
             
             int materialIndex = args.materialIndex >= 0 ? args.materialIndex : 0;
             if (materialIndex >= renderer.sharedMaterials.Length)
-                return new { error = $"Material index {materialIndex} out of range. Object has {renderer.sharedMaterials.Length} materials." };
+                return new McpToolError { error = $"Material index {materialIndex} out of range. Object has {renderer.sharedMaterials.Length} materials." };
             
             var material = renderer.sharedMaterials[materialIndex];
             if (material == null)
-                return new { error = "Material is null" };
+                return new McpToolError { error = "Material is null" };
             
             // Get shader properties
             var properties = new List<MaterialPropertyInfo>();
@@ -96,27 +96,27 @@ namespace Community.Unity.MCP
             var args = JsonUtility.FromJson<SetMaterialPropertyArgs>(argsJson);
             
             if (string.IsNullOrEmpty(args?.path))
-                return new { error = "path parameter is required" };
+                return new McpToolError { error = "path parameter is required" };
             if (string.IsNullOrEmpty(args?.propertyName))
-                return new { error = "propertyName parameter is required" };
+                return new McpToolError { error = "propertyName parameter is required" };
             
             var go = GameObject.Find(args.path);
             if (go == null)
-                return new { error = $"GameObject not found: {args.path}" };
+                return new McpToolError { error = $"GameObject not found: {args.path}" };
             
             var renderer = go.GetComponent<Renderer>();
             if (renderer == null)
-                return new { error = $"No Renderer component on: {args.path}" };
+                return new McpToolError { error = $"No Renderer component on: {args.path}" };
             
             int materialIndex = args.materialIndex >= 0 ? args.materialIndex : 0;
             if (materialIndex >= renderer.sharedMaterials.Length)
-                return new { error = $"Material index {materialIndex} out of range" };
+                return new McpToolError { error = $"Material index {materialIndex} out of range" };
             
             // Get material (use instance to allow runtime changes)
             Material material = Application.isPlaying ? renderer.materials[materialIndex] : renderer.sharedMaterials[materialIndex];
             
             if (material == null)
-                return new { error = "Material is null" };
+                return new McpToolError { error = "Material is null" };
             
             Undo.RecordObject(material, $"Set {args.propertyName}");
             
@@ -145,7 +145,7 @@ namespace Community.Unity.MCP
                         }
                         break;
                     default:
-                        return new { error = $"Unknown property type: {propType}. Use: color, float, int, vector" };
+                        return new McpToolError { error = $"Unknown property type: {propType}. Use: color, float, int, vector" };
                 }
                 
                 EditorUtility.SetDirty(material);
@@ -161,7 +161,7 @@ namespace Community.Unity.MCP
             }
             catch (Exception ex)
             {
-                return new { error = $"Failed to set property: {ex.Message}" };
+                return new McpToolError { error = $"Failed to set property: {ex.Message}" };
             }
         }
 
@@ -171,21 +171,21 @@ namespace Community.Unity.MCP
             var args = JsonUtility.FromJson<SetMaterialArgs>(argsJson);
             
             if (string.IsNullOrEmpty(args?.path))
-                return new { error = "path parameter is required" };
+                return new McpToolError { error = "path parameter is required" };
             if (string.IsNullOrEmpty(args?.materialPath))
-                return new { error = "materialPath parameter is required" };
+                return new McpToolError { error = "materialPath parameter is required" };
             
             var go = GameObject.Find(args.path);
             if (go == null)
-                return new { error = $"GameObject not found: {args.path}" };
+                return new McpToolError { error = $"GameObject not found: {args.path}" };
             
             var renderer = go.GetComponent<Renderer>();
             if (renderer == null)
-                return new { error = $"No Renderer component on: {args.path}" };
+                return new McpToolError { error = $"No Renderer component on: {args.path}" };
             
             var material = AssetDatabase.LoadAssetAtPath<Material>(args.materialPath);
             if (material == null)
-                return new { error = $"Material not found: {args.materialPath}" };
+                return new McpToolError { error = $"Material not found: {args.materialPath}" };
             
             int materialIndex = args.materialIndex >= 0 ? args.materialIndex : 0;
             
