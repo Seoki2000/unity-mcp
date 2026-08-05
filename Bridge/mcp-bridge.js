@@ -33,6 +33,13 @@ const REQUEST_TIMEOUT_MS = 45000;
 const RETRY_DELAY_MS = 1500;
 const MAX_RETRIES = 5;
 
+// Unity가 "지금 바쁘다"고 HTTP 200으로 즉답하는 코드(-32001: 컴파일/도메인 리로드 중).
+// 이건 실패가 아니라 "잠시 뒤 다시"라는 뜻이므로, 멱등 요청에 한해 브릿지가 대신 재시도한다.
+// 그대로 클라이언트에 올리면 컴파일 중 호출이 전부 실패로 끝난다.
+const UNITY_BUSY_CODE = -32001;
+const BUSY_RETRY_DELAY_MS = 2000;
+const MAX_BUSY_RETRIES = 8; // 약 16초 — 일반적인 스크립트 컴파일/도메인 리로드 구간을 덮는다.
+
 // 하트비트: 10초 주기로 Unity에 ping을 보내 마지막 정상 응답 시각을 추적한다(에러 메시지 부가정보로만 사용).
 const HEARTBEAT_INTERVAL_MS = 10000;
 const HEARTBEAT_TIMEOUT_MS = 5000;
@@ -60,7 +67,7 @@ function sendErrorResponse(id, code, message) {
     }));
 }
 
-function normalizeForMcpClient(data) {
+function normalizeForMcpClient(data, expectedId) {
     try {
         const message = JSON.parse(data);
         if (message && message.result && message.result.capabilities) {
@@ -80,6 +87,16 @@ function normalizeForMcpClient(data) {
             message.error.message.includes('notifications/initialized')
         ) {
             return null;
+        }
+
+        // ⚠️ 무한대기 방어. Unity 서버가 합성한 에러 응답은 요청 id를 잃어버릴 수 있다
+        //    (본문을 읽기 전에 실패한 경로, 또는 id 보존 수정이 없는 구버전 서버).
+        //    id 없는 응답을 그대로 올리면 클라이언트는 자기 요청과 매칭하지 못해 응답이 온 줄도 모르고
+        //    자기 타임아웃(예: 120s)까지 매달린다. 브릿지는 이 요청의 id를 알고 있으므로 교정해서 올린다.
+        if (message && message.id == null && message.error &&
+            expectedId !== undefined && expectedId !== null) {
+            message.id = expectedId;
+            log(`Repaired id-less error response from Unity -> id=${expectedId} (code=${message.error.code})`);
         }
 
         const tools = message && message.result && message.result.tools;
@@ -188,7 +205,27 @@ function isIdempotentTool(toolName) {
     return IDEMPOTENT_TOOL_PREFIXES.some(prefix => toolName.startsWith(prefix));
 }
 
-function postToUnity(line, requestId, retriesLeft, parsedLine) {
+// 이 요청을 다시 보내도 안전한가. tools/call이 아니면(initialize·tools/list·ping 등) 부작용이 없고,
+// tools/call이면 조회성 프리픽스를 가진 멱등 도구일 때만 안전하다.
+function isRetriableRequest(parsedLine) {
+    if (!parsedLine) return false;
+    if (parsedLine.method !== 'tools/call') return true;
+    return isIdempotentTool(parsedLine.params && parsedLine.params.name);
+}
+
+// Unity가 HTTP 200으로 돌려준 "바쁨"(-32001) 응답이면 그 메시지를, 아니면 null을 돌려준다.
+function parseBusyError(data) {
+    try {
+        const message = JSON.parse(data);
+        if (message && message.error && message.error.code === UNITY_BUSY_CODE) {
+            return message.error.message || 'busy';
+        }
+    } catch (e) { /* 파싱 불가 — 바쁨 응답으로 취급하지 않는다 */ }
+    return null;
+}
+
+function postToUnity(line, requestId, retriesLeft, parsedLine, busyRetriesLeft) {
+    if (busyRetriesLeft === undefined) busyRetriesLeft = MAX_BUSY_RETRIES;
     let settled = false; // 응답/에러를 정확히 1번만 처리
 
     const req = http.request({
@@ -213,7 +250,23 @@ function postToUnity(line, requestId, retriesLeft, parsedLine) {
                 sendErrorResponse(requestId, -32000, `Unity HTTP ${res.statusCode}`);
             } else if (data) {
                 lastAliveAt = Date.now(); // Unity가 정상 응답 — 생존 시각 갱신
-                const normalized = normalizeForMcpClient(data);
+
+                // Unity가 "컴파일/리로드 중이라 못 받는다"(-32001)고 즉답한 경우.
+                // HTTP는 200이라 아래 타임아웃·재시도 경로가 전혀 걸리지 않으므로 여기서 직접 재시도한다.
+                // (요청은 큐에 들어가지도 않았으므로 멱등 요청이면 다시 보내도 중복 실행 위험이 없다.)
+                const busyMessage = parseBusyError(data);
+                if (busyMessage && busyRetriesLeft > 0 && isRetriableRequest(parsedLine)) {
+                    log(`Unity busy ("${busyMessage}") — retrying in ${BUSY_RETRY_DELAY_MS}ms... (${busyRetriesLeft} left)`);
+                    setTimeout(
+                        () => postToUnity(line, requestId, retriesLeft, parsedLine, busyRetriesLeft - 1),
+                        BUSY_RETRY_DELAY_MS);
+                    return;
+                }
+                if (busyMessage && busyRetriesLeft <= 0) {
+                    log(`Unity still busy after ${MAX_BUSY_RETRIES} retries — giving up and reporting to client.`);
+                }
+
+                const normalized = normalizeForMcpClient(data, requestId);
                 if (normalized) {
                     // tools/list 성공 결과는 디스크에 캐시 — 다음 CC 시작 때 Unity가 리로드 중이어도 목록을 낼 수 있게.
                     if (parsedLine && parsedLine.method === 'tools/list') {
@@ -279,7 +332,9 @@ function postToUnity(line, requestId, retriesLeft, parsedLine) {
                 rotateHost(`ECONNREFUSED on ${failedHost}`);
             }
             log(`Unity unreachable (${e.code}), retrying in ${RETRY_DELAY_MS}ms... (${retriesLeft} left)`);
-            setTimeout(() => postToUnity(line, requestId, retriesLeft - 1, parsedLine), RETRY_DELAY_MS);
+            setTimeout(
+                () => postToUnity(line, requestId, retriesLeft - 1, parsedLine, busyRetriesLeft),
+                RETRY_DELAY_MS);
             return;
         }
 

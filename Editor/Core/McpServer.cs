@@ -6,6 +6,7 @@ using System.Net;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
+using Newtonsoft.Json.Linq;
 using UnityEditor;
 using UnityEngine;
 
@@ -484,10 +485,17 @@ namespace Community.Unity.MCP
 
             string responseBody = null;
 
+            // ⚠️ 서버가 합성하는 에러 응답에도 반드시 요청 id를 실어야 한다.
+            //    id를 잃으면(id:null) 클라이언트는 자기 요청과 매칭할 응답을 찾지 못하고,
+            //    HTTP 200을 받은 브릿지는 "정상 응답 수신"으로 판단해 타임아웃도 재시도도 걸지 않는다.
+            //    그 결과 클라이언트가 자기 타임아웃(예: 120s)까지 그대로 매달린다 — 무한대기의 실제 원인.
+            //    (아래 body 읽기 실패 두 경로는 본문 자체가 없어 id를 알 수 없으므로 null이 불가피하다.)
+            JToken requestId = TryExtractRequestId(requestBody);
+
             // 메인 스레드가 최근에 안 돌았으면(컴파일/도메인 리로드 중) 30초 기다리지 말고 즉시 busy 응답.
             if (unchecked(Environment.TickCount - _lastMainThreadPump) > 3000)
             {
-                responseBody = JsonRpcHandler.CreateErrorResponse(null, -32001,
+                responseBody = JsonRpcHandler.CreateErrorResponse(requestId, -32001,
                     "Editor busy (compiling or reloading) - retry shortly");
             }
             else
@@ -511,7 +519,7 @@ namespace Community.Unity.MCP
                     }
                     catch (Exception ex)
                     {
-                        responseBody = JsonRpcHandler.CreateErrorResponse(null, -32603, ex.Message);
+                        responseBody = JsonRpcHandler.CreateErrorResponse(requestId, -32603, ex.Message);
                     }
                     finally
                     {
@@ -524,17 +532,41 @@ namespace Community.Unity.MCP
                 if (signaled == 1)
                 {
                     ctx.Abandoned = true; // 큐에 아직 남아있다면 나중에 실행되지 않게 표시(에러 응답 생성 전에 세운다)
-                    responseBody = JsonRpcHandler.CreateErrorResponse(null, -32001,
+                    responseBody = JsonRpcHandler.CreateErrorResponse(requestId, -32001,
                         "Server stopping (domain reload) - retry shortly");
                 }
                 else if (signaled == WaitHandle.WaitTimeout)
                 {
                     ctx.Abandoned = true;
-                    responseBody = JsonRpcHandler.CreateErrorResponse(null, -32603, "Request timeout");
+                    responseBody = JsonRpcHandler.CreateErrorResponse(requestId, -32603, "Request timeout");
                 }
             }
 
-            WriteJsonResponse(response, responseBody);
+            // 어떤 경로로도 채워지지 않았다면 빈 객체("{}") 대신 id를 실은 에러를 보낸다.
+            // "{}"는 id가 없어 클라이언트가 자기 요청과 매칭하지 못하고 그대로 매달린다.
+            WriteJsonResponse(response, responseBody ?? JsonRpcHandler.CreateErrorResponse(
+                requestId, -32603, "Internal error: no response produced"));
+        }
+
+        /// <summary>
+        /// 요청 본문에서 JSON-RPC id만 안전하게 뽑는다. 파싱 실패/부재면 null.
+        /// 서버가 합성하는 에러 응답에 이 id를 실어야 클라이언트가 응답을 자기 요청과 매칭할 수 있다.
+        /// </summary>
+        private static JToken TryExtractRequestId(string requestJson)
+        {
+            if (string.IsNullOrEmpty(requestJson))
+            {
+                return null;
+            }
+
+            try
+            {
+                return JObject.Parse(requestJson)["id"];
+            }
+            catch
+            {
+                return null; // 잘못된 JSON — id를 알 수 없다.
+            }
         }
 
         /// <summary>
