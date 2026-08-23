@@ -59,11 +59,22 @@ namespace Community.Unity.MCP
             {
                 if (File.Exists(path))
                 {
-                    string existing = ExtractToken(File.ReadAllText(path));
-                    if (IsWellFormed(existing))
+                    string raw = File.ReadAllText(path);
+                    string existing = ExtractToken(raw);
+                    // projectRoot 가 없는 구버전 파일이면 토큰은 살리고 파일은 다시 쓴다
+                    // (브릿지 인덱스가 projectRoot 를 필요로 한다).
+                    bool hasProjectRoot = !string.IsNullOrEmpty(ExtractField(raw, "projectRoot"));
+                    if (IsWellFormed(existing) && hasProjectRoot)
                     {
                         _token = existing;
                         _tokenPort = port;
+                        return _token;
+                    }
+                    if (IsWellFormed(existing) && !hasProjectRoot)
+                    {
+                        _token = existing;
+                        _tokenPort = port;
+                        WriteTokenFile(path, existing, port);
                         return _token;
                     }
                 }
@@ -77,13 +88,7 @@ namespace Community.Unity.MCP
 
             try
             {
-                Directory.CreateDirectory(Path.GetDirectoryName(path));
-                // JsonUtility 는 익명 타입을 직렬화하지 못하므로(값이 {} 로 날아간다) 직접 만든다.
-                var sb = new StringBuilder();
-                sb.Append("{\"token\":\"").Append(generated).Append("\",");
-                sb.Append("\"port\":").Append(port).Append(',');
-                sb.Append("\"createdAt\":\"").Append(DateTime.UtcNow.ToString("o")).Append("\"}");
-                File.WriteAllText(path, sb.ToString());
+                WriteTokenFile(path, generated, port);
             }
             catch (Exception ex)
             {
@@ -156,6 +161,44 @@ namespace Community.Unity.MCP
             }
 
             return true;
+        }
+
+        /// <summary>
+        /// 토큰 파일을 쓴다.
+        ///
+        /// projectRoot 를 함께 기록한다 — 브릿지가 아웃프로세스 인덱스를 만들려면 프로젝트 루트를
+        /// 알아야 하는데, file:/임베디드 패키지에서는 브릿지 스크립트 위치(__dirname)로 프로젝트를
+        /// 역산할 수 없다(패키지가 프로젝트 밖에 있을 수 있다).
+        /// 이 파일은 서버가 이미 쓰고 브릿지가 이미 읽으므로 추가 배선이 필요 없다.
+        /// </summary>
+        private static void WriteTokenFile(string path, string token, int port)
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(path));
+
+            // JsonUtility 는 익명 타입을 "{}" 로 날려버리므로 직접 만든다.
+            var sb = new StringBuilder();
+            sb.Append("{");
+            sb.Append("\"token\":").Append(Newtonsoft.Json.JsonConvert.SerializeObject(token)).Append(',');
+            sb.Append("\"port\":").Append(port).Append(',');
+            sb.Append("\"projectRoot\":")
+              .Append(Newtonsoft.Json.JsonConvert.SerializeObject(
+                  McpPathGuard.ProjectRoot.Replace('\\', '/'))).Append(',');
+            sb.Append("\"createdAt\":").Append(Newtonsoft.Json.JsonConvert.SerializeObject(DateTime.UtcNow.ToString("o")));
+            sb.Append("}");
+            File.WriteAllText(path, sb.ToString());
+        }
+
+        /// <summary>토큰 파일에서 임의 문자열 필드를 읽는다.</summary>
+        private static string ExtractField(string json, string field)
+        {
+            try
+            {
+                return Newtonsoft.Json.Linq.JObject.Parse(json)[field]?.ToString();
+            }
+            catch
+            {
+                return null;
+            }
         }
 
         private static string Generate()

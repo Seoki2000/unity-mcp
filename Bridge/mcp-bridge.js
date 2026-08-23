@@ -3,6 +3,9 @@ const fs = require('fs');
 const path = require('path');
 const os = require('os');
 
+// 아웃프로세스 프로젝트 인덱스 (Phase 2). Unity 를 거치지 않고 브릿지가 직접 응답한다.
+const indexTools = require('./index/tools');
+
 const UNITY_PORT = process.env.UNITY_MCP_PORT || 3000;
 
 // 'localhost' 단일 해석에 의존하면 서버(Mono HttpListener)가 ::1 한쪽에만 바인딩하는 환경에서
@@ -84,6 +87,8 @@ function log(msg) {
     console.error(`[Unity MCP Bridge] ${msg}`);
 }
 
+indexTools.setLogger(log);
+
 // 어떤 실패든 클라이언트에 JSON-RPC 에러를 반드시 돌려준다.
 // (응답을 안 보내면 MCP 클라이언트가 해당 id를 영원히 기다리며 행이 걸림)
 function sendErrorResponse(id, code, message) {
@@ -140,6 +145,13 @@ function normalizeForMcpClient(data, expectedId) {
                 if (schema && typeof schema.properties === 'string') {
                     schema.properties = JSON.parse(schema.properties);
                 }
+            }
+
+            // 브릿지가 로컬에서 처리하는 인덱스 도구를 목록에 합친다.
+            // Unity 가 모르는 도구이므로 서버 응답에는 없다.
+            const known = new Set(tools.map(t => t && t.name));
+            for (const local of indexTools.toolDefinitions()) {
+                if (!known.has(local.name)) tools.push(local);
             }
         }
 
@@ -224,6 +236,24 @@ rl.on('line', (line) => {
             id: parsedLine.id,
             result: { prompts: [] },
         }));
+        return;
+    }
+
+    // 인덱스 도구는 브릿지가 로컬에서 처리한다 — Unity 로 보내지 않는다.
+    // 그래서 에디터가 컴파일/리로드 중이어도 응답하고, 메인 스레드 30초 캡과 무관하다.
+    if (parsedLine && parsedLine.method === 'tools/call' &&
+        parsedLine.params && indexTools.isLocalTool(parsedLine.params.name)) {
+        let result;
+        try {
+            result = indexTools.callLocalTool(parsedLine.params.name, parsedLine.params.arguments, UNITY_PORT);
+        } catch (e) {
+            log(`local tool '${parsedLine.params.name}' threw: ${e && e.stack ? e.stack : e}`);
+            result = {
+                content: [{ type: 'text', text: JSON.stringify({ error: `Index tool failed: ${e && e.message ? e.message : e}` }) }],
+                isError: true,
+            };
+        }
+        console.log(JSON.stringify({ jsonrpc: '2.0', id: parsedLine.id, result }));
         return;
     }
 
