@@ -20,6 +20,48 @@ function resolveGuid(index, target) {
   return index.pathToGuid.get(norm) || null;
 }
 
+// 타입의 베이스 체인. 프로젝트 어셈블리 밖(예: 패키지/BCL) 타입에 닿으면 그 이름까지만 담고 멈춘다.
+function baseChainOf(sym, info, maxDepth) {
+  const limit = maxDepth > 0 ? maxDepth : 12;
+  const chain = [];
+  let cur = info;
+  const seen = new Set();
+  while (cur && cur.baseType && chain.length < limit) {
+    if (seen.has(cur.fullName)) break;   // 순환 방어
+    seen.add(cur.fullName);
+    chain.push(cur.baseType);
+    const next = sym.typeByFullName.get(cur.baseType);
+    if (!next) break;                    // 인덱스 밖 타입 — 여기서 끝
+    cur = next;
+  }
+  return chain;
+}
+
+const UNITY_ATTACHABLE = new Set(['UnityEngine.MonoBehaviour', 'UnityEngine.ScriptableObject']);
+
+// 체인이 여기에 닿으면 "확실히 아니다" 로 판정할 수 있다. 완전히 해석된 종점이다.
+const NON_UNITY_ROOTS = new Set([
+  'System.Object', 'System.ValueType', 'System.Enum', 'System.Attribute',
+  'System.Exception', 'System.MulticastDelegate', 'System.Delegate',
+]);
+
+// true / false / null 을 돌려준다. null 은 "모른다" 다.
+// 심볼 인덱스는 사용자 어셈블리만 담는다. 그래서 체인이 패키지 어셈블리로 나가면 거기서 끊긴다.
+// 실측(2026-08-23): MonsterSpawner 는 Unity.Netcode.NetworkBehaviour -> MonoBehaviour 인데
+// NetworkBehaviour 가 인덱스 밖이라 체인이 끊겼다. 그때 false 를 돌려주면 프리팹 9개에
+// 실제로 붙어 있는 컴포넌트를 "붙을 수 없다" 고 단정하는 것이 된다.
+// 모르는 것은 모른다고 해야 한다 — false 는 해석이 끝났을 때만 쓴다.
+function isUnityAttachable(sym, info) {
+  if (!info) return null;
+  if (UNITY_ATTACHABLE.has(info.baseType)) return true;
+  const chain = baseChainOf(sym, info);
+  for (const b of chain) if (UNITY_ATTACHABLE.has(b)) return true;
+  if (chain.length === 0) return null;
+  const last = chain[chain.length - 1];
+  if (NON_UNITY_ROOTS.has(last)) return false;   // 끝까지 해석됐고 Unity 타입이 아니다
+  return null;                                   // 인덱스 밖에서 끊겼다 — 알 수 없다
+}
+
 function pageOf(arr, offset, limit) {
   const off = offset > 0 ? offset : 0;
   const lim = limit > 0 ? Math.min(limit, 500) : 50;
@@ -83,8 +125,13 @@ function resolveScriptType(index, guid) {
       fieldCount: pick.fields.length,
       methodCount: pick.methods.length,
       // MonoBehaviour/ScriptableObject 가 아니면 컴포넌트로 붙을 수 없다 — AI 가 오해하지 않게 명시한다.
-      isUnityScriptableType:
-        pick.baseType === 'UnityEngine.MonoBehaviour' || pick.baseType === 'UnityEngine.ScriptableObject',
+      // 직상위만 보면 안 된다: PlayerDefaultAttack -> BaseAttack -> MonoBehaviour 처럼 한 단계
+      // 건너뛰면 false 가 되고, 실제로 프리팹에 붙어 있는 컴포넌트를 "붙을 수 없는 타입" 으로
+      // 잘못 알린다. 프로젝트 어셈블리 안에서 베이스 체인을 따라 올라가 판정한다.
+      // true / false / null(모름). null 은 베이스 체인이 인덱스 밖 어셈블리로 나가 끊긴 경우다.
+      isUnityScriptableType: isUnityAttachable(sym, pick),
+      // 체인을 어디까지 따라갔는지. 마지막 항목이 System.Object 류가 아니면 거기서 끊긴 것이다.
+      baseChain: baseChainOf(sym, pick),
     } : null,
     otherTypesInFile: candidates.filter(c => !pick || c !== pick.fullName),
   };
