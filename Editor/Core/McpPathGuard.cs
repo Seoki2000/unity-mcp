@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.IO;
 using UnityEngine;
 
@@ -19,6 +20,18 @@ namespace Community.Unity.MCP
     /// - 정규화(Path.GetFullPath) 후 프로젝트 루트 접두사인지 검사한다. ".." 문자열 검사에 의존하지 않는다.
     /// - 디렉터리 경계까지 확인한다("C:/Proj" 가 "C:/ProjEvil" 을 통과시키지 않도록).
     /// - 에셋 경로는 추가로 Assets/ 또는 Packages/ 하위인지 확인한다.
+    ///
+    /// ⚠️ 알려진 한계 — 이 검사는 어휘적(lexical)이다. Path.GetFullPath 는 ".." 를 정규화하지만
+    /// 재분석 지점(정션/심볼릭 링크)은 따라가지 않는다. 그래서 프로젝트 안에 있는 정션이
+    /// 프로젝트 밖을 가리키면 그 경로는 검사를 통과한다.
+    /// 2026-08-23 실측: 이 프로젝트의 Assets/50.Art 가 그런 정션이다(대상은 프로젝트 밖).
+    ///
+    /// 이걸 거부하도록 바꾸지 않은 이유: 그 정션은 의도된 프로젝트 구조다(아트를 외부 SVN
+    /// 워킹카피에 두고 붙인 것). 거부하면 아트 자산 접근이 전부 막힌다. 위협 모델도 다르다 —
+    /// 여기서 막으려는 것은 경로 문자열로 프로젝트를 벗어나는 것이고, 정션은 파일시스템에
+    /// 이미 존재하는 구조다. 대신 조용히 넘어가지 않게, 링크를 통과하는 경우 한 번 경고한다.
+    /// 완전한 봉쇄가 필요하면 GetFinalPathNameByHandle 로 실제 경로를 해석해 허용 루트
+    /// 목록(프로젝트 루트 + 의도된 정션 대상)과 대조해야 한다.
     /// </summary>
     public static class McpPathGuard
     {
@@ -85,8 +98,48 @@ namespace Community.Unity.MCP
                 return false;
             }
 
+            WarnOnceIfTraversesLink(candidate);
+
             fullPath = candidate;
             return true;
+        }
+
+        // 링크를 통과해 프로젝트 밖 실체를 가리키는 경로를 한 번만 알린다.
+        // 봉쇄를 바꾸지는 않는다 — 다만 "어휘적으로는 안에 있지만 실제로는 밖" 인 경로가
+        // 조용히 통과하는 상태를 남기지 않는다.
+        private static readonly HashSet<string> _warnedLinks =
+            new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        private static void WarnOnceIfTraversesLink(string fullPath)
+        {
+            try
+            {
+                string dir = Path.GetDirectoryName(fullPath);
+                string root = ProjectRoot;
+                while (!string.IsNullOrEmpty(dir) && dir.Length > root.Length)
+                {
+                    var attrs = File.GetAttributes(dir);
+                    if ((attrs & FileAttributes.ReparsePoint) != 0)
+                    {
+                        lock (_warnedLinks)
+                        {
+                            if (_warnedLinks.Add(dir))
+                            {
+                                Debug.LogWarning(
+                                    $"[MCP] Path containment is lexical: '{dir}' is a reparse point " +
+                                    "(junction/symlink) inside the project, so paths under it pass the guard " +
+                                    "even though the real target may be outside the project root.");
+                            }
+                        }
+                        return;
+                    }
+                    dir = Path.GetDirectoryName(dir);
+                }
+            }
+            catch
+            {
+                // 속성 조회 실패는 봉쇄 판단과 무관하다. 진단용 경고를 위해 예외를 올리지 않는다.
+            }
         }
 
         /// <summary>
