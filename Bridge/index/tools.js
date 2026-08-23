@@ -12,6 +12,7 @@ const path = require('path');
 const os = require('os');
 
 const scan = require('./scan');
+const symbols = require('./symbols');
 const queries = require('./queries');
 
 const PREFIX = 'unity_index_';   // 상태/재빌드 도구
@@ -21,6 +22,7 @@ const LOCAL_TOOL_NAMES = new Set([
   'unity_find_references',
   'unity_find_component_usages',
   'unity_find_missing_scripts',
+  'unity_get_type_symbols',
 ]);
 
 let _index = null;
@@ -61,7 +63,7 @@ function cachePath(root) {
   return path.join(os.homedir(), '.unity-mcp', `index-${key}.json`);
 }
 
-const CACHE_VERSION = 1;
+const CACHE_VERSION = 2;
 
 function saveCache(index) {
   try {
@@ -75,6 +77,11 @@ function saveCache(index) {
       guidToPath: [...index.guidToPath],
       refs: [...index.refs].map(([g, s]) => [g, [...s]]),
       scriptRefs: [...index.scriptRefs].map(([g, s]) => [g, [...s]]),
+      symbols: index.symbols ? {
+        stats: index.symbols.stats,
+        assemblies: index.symbols.assemblies,
+        types: [...index.symbols.typeByFullName.values()],
+      } : null,
     };
     fs.mkdirSync(path.dirname(cachePath(index.root)), { recursive: true });
     fs.writeFileSync(cachePath(index.root), JSON.stringify(payload));
@@ -92,6 +99,26 @@ function loadCache(root) {
     const pathToGuid = new Map();
     for (const [g, p] of guidToPath) pathToGuid.set(p, g);
 
+    let sym = null;
+    if (raw.symbols && Array.isArray(raw.symbols.types)) {
+      const typeByFullName = new Map();
+      const typesByShortName = new Map();
+      const typesBySourceFile = new Map();
+      for (const t of raw.symbols.types) {
+        typeByFullName.set(t.fullName, t);
+        let sl = typesByShortName.get(t.name);
+        if (!sl) typesByShortName.set(t.name, sl = []);
+        sl.push(t.fullName);
+        for (const sf of t.sourceFiles || []) {
+          let l = typesBySourceFile.get(sf);
+          if (!l) typesBySourceFile.set(sf, l = []);
+          if (!l.includes(t.fullName)) l.push(t.fullName);
+        }
+      }
+      sym = { typeByFullName, typesByShortName, typesBySourceFile,
+              assemblies: raw.symbols.assemblies || [], stats: raw.symbols.stats || {} };
+    }
+
     return {
       root,
       includePackageCache: raw.includePackageCache,
@@ -100,6 +127,7 @@ function loadCache(root) {
       pathToGuid,
       refs: new Map(raw.refs.map(([g, a]) => [g, new Set(a)])),
       scriptRefs: new Map(raw.scriptRefs.map(([g, a]) => [g, new Set(a)])),
+      symbols: sym,
       stats: raw.stats,
       _builtAt: raw.builtAt,
     };
@@ -149,10 +177,25 @@ function ensureIndex(port, force, includePackageCache, cacheOnly) {
 
   log(`building index for ${_projectRoot}${includePackageCache ? ' (+PackageCache)' : ''}...`);
   _index = scan.buildIndex(_projectRoot, { includePackageCache: !!includePackageCache });
+  log(`layer A built in ${_index.stats.msTotal}ms — ${_index.stats.guids} guids, ` +
+      `${_index.stats.referenceEdges} edges, ${_index.stats.scriptGuids} script guids`);
+
+  // 레이어 B — 컴파일된 어셈블리 심볼 + PDB 소스 매핑. 조인의 다른 한쪽이다.
+  const sym = symbols.buildSymbolIndex(_projectRoot);
+  if (sym.error) {
+    log(`symbol index unavailable: ${sym.error}`);
+    _index.symbols = null;
+    _index.stats.symbolError = sym.error;
+  } else {
+    _index.symbols = sym;
+    _index.stats.symbols = sym.stats;
+    log(`layer B built in ${sym.stats.msTotal}ms — ${sym.stats.userAssemblies} user assemblies, ` +
+        `${sym.stats.types} types, ${sym.stats.sourceFilesMapped} source files mapped` +
+        (sym.stats.failedAssemblies ? `, ${sym.stats.failedAssemblies} failed` : ''));
+  }
+
   _meta = { builtAt: new Date().toISOString(), fromCache: false };
   _buildError = null;
-  log(`built in ${_index.stats.msTotal}ms — ${_index.stats.guids} guids, ` +
-      `${_index.stats.referenceEdges} edges, ${_index.stats.scriptGuids} script guids`);
   saveCache(_index);
   return _index;
 }
@@ -214,6 +257,19 @@ function toolDefinitions() {
       annotations: ro,
     },
     {
+      name: 'unity_get_type_symbols',
+      description: 'Get symbols for a compiled type: base type, fields, methods, declaring assembly and source file. Read from the compiled assembly metadata plus its Portable PDB, so it reflects what actually compiled — not a text parse of .cs.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          type: { type: 'string', description: "Full type name (e.g. 'MyGame.Player') or short name if unambiguous" },
+          maxMembers: { type: 'integer', description: 'Max fields and methods to return (default 100, max 500)' },
+        },
+        required: ['type'],
+      },
+      annotations: ro,
+    },
+    {
       name: 'unity_find_missing_scripts',
       description: 'Find assets whose components reference a script that no longer exists (Editor shows "The associated script can not be loaded"). Found by joining serialized m_Script GUIDs against .meta files.',
       inputSchema: { type: 'object', properties: { ...paging }, required: [] },
@@ -252,6 +308,7 @@ function callLocalTool(name, args, port) {
   let result;
   if (name === 'unity_find_references') result = queries.findReferences(idx, a);
   else if (name === 'unity_find_component_usages') result = queries.findComponentUsages(idx, a);
+  else if (name === 'unity_get_type_symbols') result = queries.getTypeSymbols(idx, a);
   else if (name === 'unity_find_missing_scripts') {
     // Missing Script 판정에는 전체 GUID 커버리지가 필수다.
     // Assets/Packages 만으로 판정하면 패키지 스크립트가 전부 'missing' 으로 잡힌다

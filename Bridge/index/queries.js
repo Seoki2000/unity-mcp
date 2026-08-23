@@ -28,6 +28,62 @@ function pageOf(arr, offset, limit) {
   };
 }
 
+
+/**
+ * 조인 레이어 — 스크립트 GUID 를 실제 컴파일된 타입으로 해석한다.
+ *
+ * 경로: m_Script.guid → (.meta) .cs 경로 → (PDB) 그 파일에 선언된 타입 → (DLL) 타입 정보
+ * 이 세 단계를 잇는 것이 Phase 2 의 핵심이다. 한쪽만으로는 답이 나오지 않는다.
+ */
+function resolveScriptType(index, guid) {
+  const csPath = index.guidToPath.get(guid);
+  if (!csPath) return { resolved: false, reason: 'no .meta for this GUID' };
+
+  const sym = index.symbols;
+  if (!sym) return { resolved: false, csPath, reason: 'symbol index not built' };
+
+  const candidates = sym.typesBySourceFile.get(csPath) || [];
+  if (!candidates.length) {
+    return {
+      resolved: false, csPath,
+      reason: 'no compiled type maps to this file (script may not compile, or its assembly was not built)',
+    };
+  }
+
+  // 한 파일에 여러 타입이 있을 수 있다(보조 struct, 중첩 타입, 정적 유틸 등).
+  // 선택 순서:
+  //   1) 짧은 이름이 파일명과 같은 타입 — Unity 는 MonoScript 로 쓰이는 타입의 이름이
+  //      파일명과 일치할 것을 요구한다. 가장 확실한 기준이다.
+  //   2) MonoBehaviour/ScriptableObject 파생
+  //   3) 그 외 첫 번째 (이 경우 확신할 수 없으므로 confidence 를 낮게 보고한다)
+  const infos = candidates.map(fn => sym.typeByFullName.get(fn)).filter(Boolean);
+  const stem = csPath.slice(csPath.lastIndexOf('/') + 1).replace(/\.cs$/i, '');
+
+  const byName = infos.find(t => t.name === stem);
+  const unityDerived = infos.find(t =>
+    t.baseType === 'UnityEngine.MonoBehaviour' || t.baseType === 'UnityEngine.ScriptableObject');
+
+  const pick = byName || unityDerived || infos[0] || null;
+  const confidence = byName ? 'filename-match' : (unityDerived ? 'unity-derived' : 'ambiguous');
+
+  return {
+    resolved: !!pick,
+    csPath,
+    confidence,
+    type: pick ? {
+      fullName: pick.fullName,
+      assembly: pick.assembly,
+      baseType: pick.baseType,
+      fieldCount: pick.fields.length,
+      methodCount: pick.methods.length,
+      // MonoBehaviour/ScriptableObject 가 아니면 컴포넌트로 붙을 수 없다 — AI 가 오해하지 않게 명시한다.
+      isUnityScriptableType:
+        pick.baseType === 'UnityEngine.MonoBehaviour' || pick.baseType === 'UnityEngine.ScriptableObject',
+    } : null,
+    otherTypesInFile: candidates.filter(c => !pick || c !== pick.fullName),
+  };
+}
+
 /**
  * 이 에셋(경로 또는 GUID)을 참조하는 에셋들.
  * 기존 unity_search_project type=reference 를 대체한다.
@@ -75,12 +131,18 @@ function findComponentUsages(index, args) {
   const users = set ? [...set].sort() : [];
   const page = pageOf(users, args.offset, args.maxResults);
 
+  const join = resolveScriptType(index, guid);
+
   return {
     script: args.script,
     guid,
     resolvedPath: index.guidToPath.get(guid) || null,
     // 스크립트 GUID 인데 .meta 가 없으면 그 스크립트는 프로젝트에 존재하지 않는다.
     scriptExists: index.guidToPath.has(guid),
+    // 조인 결과 — 실제 컴파일된 타입
+    resolvedType: join.resolved ? join.type : null,
+    typeResolution: join.resolved ? join.confidence : join.reason,
+    otherTypesInFile: join.otherTypesInFile || [],
     totalCount: page.total,
     returnedCount: page.items.length,
     offset: page.offset,
@@ -181,4 +243,71 @@ function status(index, meta) {
   };
 }
 
-module.exports = { findReferences, findComponentUsages, findMissingScripts, status, resolveGuid };
+/**
+ * 타입 심볼 조회. 전체 이름 또는 짧은 이름을 받는다.
+ * 짧은 이름이 여러 타입과 겹치면 후보를 돌려주고 하나를 고르지 않는다.
+ */
+function getTypeSymbols(index, args) {
+  const sym = index.symbols;
+  if (!sym) return { error: 'Symbol index not built. Run unity_index_rebuild.' };
+
+  const q = String(args.type || '').trim();
+  if (!q) return { error: 'type is required' };
+
+  let info = sym.typeByFullName.get(q);
+  let candidates = null;
+
+  if (!info) {
+    const shortMatches = sym.typesByShortName.get(q) || [];
+    if (shortMatches.length === 1) {
+      info = sym.typeByFullName.get(shortMatches[0]);
+    } else if (shortMatches.length > 1) {
+      candidates = shortMatches.slice(0, 20);
+    }
+  }
+
+  if (!info) {
+    return {
+      error: candidates
+        ? `'${q}' matches ${candidates.length} types. Pass the full name.`
+        : `Type '${q}' not found in the symbol index (user assemblies only).`,
+      candidates: candidates || undefined,
+    };
+  }
+
+  // 이 타입이 붙어 있는 에셋 — 조인의 반대 방향
+  let attachedTo = null;
+  for (const sf of info.sourceFiles) {
+    const guid = index.pathToGuid.get(sf);
+    if (!guid) continue;
+    const users = index.scriptRefs.get(guid);
+    if (users) attachedTo = { scriptGuid: guid, assetCount: users.size, sampleAssets: [...users].sort().slice(0, 5) };
+    break;
+  }
+
+  const maxMembers = args.maxMembers > 0 ? Math.min(args.maxMembers, 500) : 100;
+  return {
+    fullName: info.fullName,
+    name: info.name,
+    namespace: info.namespace || null,
+    assembly: info.assembly,
+    baseType: info.baseType,
+    isPublic: info.isPublic,
+    isAbstract: info.isAbstract,
+    isSealed: info.isSealed,
+    isInterface: info.isInterface,
+    sourceFiles: info.sourceFiles,
+    fieldCount: info.fields.length,
+    methodCount: info.methods.length,
+    fields: info.fields.slice(0, maxMembers),
+    methods: info.methods.slice(0, maxMembers).map(m => ({
+      name: m.name, isPublic: m.isPublic, isStatic: m.isStatic, isVirtual: m.isVirtual, isAbstract: m.isAbstract,
+    })),
+    truncatedMembers: info.fields.length > maxMembers || info.methods.length > maxMembers,
+    attachedTo,
+    note: 'Field/method names come from the compiled assembly; source file mapping comes from the Portable PDB. ' +
+          'Field type signatures are not decoded yet (Phase 2b-2).',
+  };
+}
+
+module.exports = { findReferences, findComponentUsages, findMissingScripts, getTypeSymbols, status, resolveGuid, resolveScriptType };
