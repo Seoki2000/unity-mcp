@@ -5,9 +5,9 @@
   "description": "Model Context Protocol (MCP) server for Unity. Enables AI agents to query scenes, assets, and execute actions in the Unity Editor.",
   "unity": "2021.3",
   "unityRelease": "0f1",
-  "documentationUrl": "https://github.com/usmanbutt-dev/unity-mcp#readme",
-  "changelogUrl": "https://github.com/usmanbutt-dev/unity-mcp/blob/main/CHANGELOG.md",
-  "licensesUrl": "https://github.com/usmanbutt-dev/unity-mcp/blob/main/LICENSE",
+  "documentationUrl": "https://github.com/Seoki2000/unity-mcp/tree/optimized#readme",
+  "changelogUrl": "https://github.com/Seoki2000/unity-mcp/blob/optimized/CHANGELOG.md",
+  "licensesUrl": "https://github.com/Seoki2000/unity-mcp/blob/optimized/LICENSE",
   "keywords": [
     "mcp",
     "ai",
@@ -23,7 +23,7 @@
   },
   "repository": {
     "type": "git",
-    "url": "https://github.com/usmanbutt-dev/unity-mcp.git"
+    "url": "https://github.com/Seoki2000/unity-mcp.git"
   },
   "type": "tool",
   "dependencies": {},

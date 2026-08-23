@@ -71,8 +71,12 @@ MCP is an open standard by Anthropic that allows AI systems to access external t
 2. Click the `+` icon in the top left and select `Add package from git URL...`.
 3. Enter the repository URL (or local path if you are using a local clone):
    ```text
-   https://github.com/usmanbutt-dev/unity-mcp.git
+   https://github.com/Seoki2000/unity-mcp.git#optimized
    ```
+
+   This is a fork of [usmanbutt-dev/unity-mcp](https://github.com/usmanbutt-dev/unity-mcp).
+   `optimized` is this fork's line — see [Fork dev build](#fork-dev-build--dev-001) for what differs.
+   Projects consuming this package should pin a commit SHA rather than the branch name.
 
 ## Quick Start
 1. The server **auto-starts** when the Unity project is loaded.

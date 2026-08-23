@@ -188,8 +188,12 @@ MCP는 AI 시스템이 외부 도구와 데이터에 접근할 수 있도록 앤
 2. 좌측 상단의 `+` 아이콘을 클릭하고 `Add package from git URL...`을 선택합니다.
 3. 아래의 저장소 URL을 입력합니다 (또는 로컬 클론 경로 사용):
    ```text
-   https://github.com/usmanbutt-dev/unity-mcp.git
+   https://github.com/Seoki2000/unity-mcp.git#optimized
    ```
+
+   이 패키지는 [usmanbutt-dev/unity-mcp](https://github.com/usmanbutt-dev/unity-mcp) 의 포크입니다.
+   `optimized` 가 이 포크의 정본 브랜치입니다 — 무엇이 다른지는 위 [dev-0.0.1](#포크-개발-버전--dev-001) 참조.
+   이 패키지를 쓰는 프로젝트는 브랜치 이름이 아니라 **커밋 SHA 로 핀** 하는 것을 권합니다.
 
 ## 빠른 시작
 1. Unity 프로젝트를 로드하면 서버가 **자동으로 시작**됩니다.
