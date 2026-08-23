@@ -42,14 +42,17 @@ function log(msg) {
 // 탐색 기준 디렉터리.
 // 1순위 cwd — 이 런처를 전역 등록하면 다른 Unity 프로젝트에서도 실행되는데,
 //            그때는 그 프로젝트가 쓰는 패키지 버전의 브릿지를 쓰는 게 맞다.
-// 2순위 __dirname — 런처가 놓인 프로젝트(폴백). cwd에 패키지가 없는 경우를 덮는다.
+// 2순위 같은 폴더 — 런처가 패키지 안(Bridge/)에서 실행되는 경우. 로컬 클론을 file: 로
+//            참조하는 개발 환경에서는 프로젝트에 PackageCache 항목이 아예 생기지 않아
+//            1순위가 빈손으로 끝난다. 그때 옆에 있는 브릿지가 정답이다.
+// 3순위 __dirname 을 프로젝트 루트로 — 런처 사본이 어느 프로젝트 안에 놓인 경우(폴백).
 //            브릿지는 localhost 포트로 Unity에 붙는 클라이언트라 프로젝트가 달라도 동작한다.
-function searchRoots() {
-    const roots = [process.cwd()];
-    if (path.resolve(__dirname) !== path.resolve(process.cwd())) {
-        roots.push(__dirname);
+function resolveSiblingBridge() {
+    const sibling = path.join(__dirname, path.basename(BRIDGE_REL));
+    if (fs.existsSync(sibling)) {
+        return { bridge: sibling, source: `${__dirname} > 같은 폴더 (패키지 내부)` };
     }
-    return roots;
+    return { error: `${sibling} — 브릿지 없음` };
 }
 
 function resolveBridgeIn(projectRoot) {
@@ -89,8 +92,13 @@ function resolveBridgeIn(projectRoot) {
 let resolved = null;
 const tried = [];
 
-for (const root of searchRoots()) {
-    const result = resolveBridgeIn(root);
+const attempts = [() => resolveBridgeIn(process.cwd()), resolveSiblingBridge];
+if (path.resolve(__dirname) !== path.resolve(process.cwd())) {
+    attempts.push(() => resolveBridgeIn(__dirname));
+}
+
+for (const attempt of attempts) {
+    const result = attempt();
     if (result.bridge) {
         resolved = result;
         break;
