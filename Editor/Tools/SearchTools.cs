@@ -225,6 +225,7 @@ namespace Community.Unity.MCP
         private static string SearchByReference(string query, List<SearchResult> results, int maxResults)
         {
             string targetPath = null;
+            string ambiguity = null;
 
             // 1) 질의가 에셋 경로면 그대로 쓴다.
             if (query.IndexOf('/') >= 0 && !string.IsNullOrEmpty(AssetDatabase.AssetPathToGUID(query)))
@@ -258,9 +259,12 @@ namespace Community.Unity.MCP
                     paths.Sort(StringComparer.OrdinalIgnoreCase);
                     targetPath = paths[0];
                     int shown = Math.Min(paths.Count, 10);
-                    return $"'{query}' matched {paths.Count} assets; searched references to '{targetPath}' only. " +
-                           $"Pass an exact asset path or GUID to disambiguate. Candidates: {string.Join(", ", paths.GetRange(0, shown))}" +
-                           (paths.Count > shown ? ", ..." : "");
+                    // 여기서 return 하면 아래 의존성 루프를 건너뛰어 결과가 0건이 된다.
+                    // 그런데 note 는 "searched references to X" 라고 말한다 — 검색했다고 하면서
+                    // 아무것도 안 찾은 답이 나가고, 읽는 쪽은 "참조가 없다" 로 읽는다. 기록만 남기고 계속한다.
+                    ambiguity = $"'{query}' matched {paths.Count} assets; searched references to '{targetPath}' only. " +
+                                $"Pass an exact asset path or GUID to disambiguate. Candidates: {string.Join(", ", paths.GetRange(0, shown))}" +
+                                (paths.Count > shown ? ", ..." : "");
                 }
 
                 targetPath = paths[0];
@@ -300,7 +304,7 @@ namespace Community.Unity.MCP
                 }
             }
 
-            return null;   // 모호성 없음
+            return ambiguity;   // 모호했으면 그 사실, 아니면 null
         }
 
         /// <summary>
