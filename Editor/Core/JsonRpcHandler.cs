@@ -47,8 +47,8 @@ namespace Community.Unity.MCP
                         result = HandleToolsCall(paramsToken);
                         break;
                     case "resources/list":
-                        // ResourceHandler는 기존대로 문자열 params를 받는다(내부에서 uri 파싱). 압축 JSON 문자열로 전달.
-                        result = ResourceHandler.HandleResourcesList(paramsToken?.ToString(Formatting.None));
+                        // JToken 을 그대로 넘긴다(문자열 되직렬화 제거).
+                        result = ResourceHandler.HandleResourcesList(paramsToken);
                         break;
                     case "resources/read":
                         // JToken 을 그대로 넘긴다 — 문자열로 되직렬화 후 정규식 재파싱하던 경로 제거.
@@ -75,6 +75,13 @@ namespace Community.Unity.MCP
             catch (FileNotFoundException ex)
             {
                 // 존재하지 않는 리소스 — 이것도 파싱 오류가 아니다.
+                return CreateErrorResponse(idToken, -32602, ex.Message);
+            }
+            catch (ArgumentException ex)
+            {
+                // 알 수 없는 리소스 타입 / 잘못된 URI / 누락된 도구 이름 등.
+                // 전부 "잘못된 인자"이며 파싱 실패가 아니다. -32700 로 뭉개면
+                // AI 가 자기 JSON 이 깨졌다고 오해하고 같은 요청을 반복한다.
                 return CreateErrorResponse(idToken, -32602, ex.Message);
             }
             catch (Exception ex)

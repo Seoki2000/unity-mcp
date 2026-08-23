@@ -48,6 +48,13 @@ namespace Community.Unity.MCP
         private const int MaxRequestBodyBytes = 32 * 1024 * 1024;
 
         /// <summary>
+        /// 응답 상한(바이트). 개별 도구가 페이지네이션으로 이미 크기를 제어하지만,
+        /// 어느 경로에서든 새는 것을 막는 마지막 안전망이다. 초과 시 본문을 자르지 않고
+        /// (잘린 JSON 은 파싱 불가) 에러로 바꿔 무엇이 문제인지 알린다.
+        /// </summary>
+        private const int MaxResponseBodyBytes = 16 * 1024 * 1024;
+
+        /// <summary>
         /// 요청 1건의 생존 상태. 타임아웃/셧다운으로 워커가 대기를 포기하면 Abandoned를 세워
         /// 큐에 남아있던 액션이 뒤늦게 실행되며 부작용을 내는 것을 막는다.
         /// </summary>
@@ -630,6 +637,18 @@ namespace Community.Unity.MCP
                 response.ContentType = "application/json";
                 response.StatusCode = 200;
                 var buffer = Encoding.UTF8.GetBytes(responseBody ?? "{}");
+
+                if (buffer.Length > MaxResponseBodyBytes)
+                {
+                    // 잘라 보내면 클라이언트가 파싱 불가한 JSON 을 받는다. 원인을 담은 에러로 대체한다.
+                    Debug.LogWarning($"[MCP] Response too large ({buffer.Length} bytes) — replaced with an error. " +
+                                     "Use pagination arguments (maxResults/offset) to narrow the request.");
+                    var replacement = JsonRpcHandler.CreateErrorResponse(null, -32603,
+                        $"Response too large ({buffer.Length} bytes, limit {MaxResponseBodyBytes}). " +
+                        "Narrow the request using maxResults/offset or a more specific path.");
+                    buffer = Encoding.UTF8.GetBytes(replacement);
+                }
+
                 response.ContentLength64 = buffer.Length;
                 response.OutputStream.Write(buffer, 0, buffer.Length);
             }

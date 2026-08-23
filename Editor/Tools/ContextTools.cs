@@ -102,6 +102,10 @@ namespace Community.Unity.MCP
             
             return new ComponentSchemaResult
             {
+                // 짧은 이름이 겹치면 어느 타입을 봤는지 알려준다. 기존엔 조용히 아무거나 골랐다.
+                note = IsAmbiguousTypeName(args.componentType)
+                    ? $"'{args.componentType}' matches multiple types; resolved to '{type.FullName}'. Pass the full name to disambiguate."
+                    : null,
                 componentType = type.Name,
                 fullTypeName = type.FullName,
                 baseType = type.BaseType?.Name,
@@ -226,22 +230,67 @@ namespace Community.Unity.MCP
             return path;
         }
 
+        // 타입 이름 → 타입. 도메인 리로드마다 1회만 구축한다.
+        // 기존 구현은 매 호출마다 AppDomain 전체를 순회하며 assembly.GetTypes() 를 호출했고
+        // (수만 개 타입), 동명 타입이 있으면 어셈블리 순서에 따라 조용히 아무거나 골랐다.
+        private static Dictionary<string, Type> _typeByShortName;
+        private static Dictionary<string, Type> _typeByFullName;
+        private static readonly HashSet<string> _ambiguousShortNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        private static void BuildTypeIndex()
+        {
+            if (_typeByShortName != null) return;
+
+            _typeByShortName = new Dictionary<string, Type>(StringComparer.OrdinalIgnoreCase);
+            _typeByFullName = new Dictionary<string, Type>(StringComparer.OrdinalIgnoreCase);
+
+            // TypeCache 는 Unity 가 이미 만들어 둔 인덱스라 GetTypes() 전수 순회보다 훨씬 싸다.
+            foreach (var t in TypeCache.GetTypesDerivedFrom<object>())
+            {
+                if (t == null) continue;
+
+                if (!string.IsNullOrEmpty(t.FullName) && !_typeByFullName.ContainsKey(t.FullName))
+                {
+                    _typeByFullName[t.FullName] = t;
+                }
+
+                if (_typeByShortName.TryGetValue(t.Name, out var existing))
+                {
+                    // 짧은 이름이 겹치면 모호하다고 표시하고, UnityEngine 계열을 우선한다
+                    // (예: 사용자 코드의 'Camera' 보다 UnityEngine.Camera).
+                    if (existing != t) _ambiguousShortNames.Add(t.Name);
+                    bool existingIsUnity = existing.Namespace != null && existing.Namespace.StartsWith("UnityEngine", StringComparison.Ordinal);
+                    bool candidateIsUnity = t.Namespace != null && t.Namespace.StartsWith("UnityEngine", StringComparison.Ordinal);
+                    if (candidateIsUnity && !existingIsUnity) _typeByShortName[t.Name] = t;
+                }
+                else
+                {
+                    _typeByShortName[t.Name] = t;
+                }
+            }
+        }
+
         private static Type FindType(string typeName)
         {
-            // Try direct name
+            if (string.IsNullOrEmpty(typeName)) return null;
+
+            // 정확한 어셈블리 수식 이름이면 그대로
             var type = Type.GetType(typeName);
             if (type != null) return type;
-            
-            // Search in loaded assemblies
-            foreach (var assembly in AppDomain.CurrentDomain.GetAssemblies())
-            {
-                type = assembly.GetTypes().FirstOrDefault(t => 
-                    t.Name.Equals(typeName, StringComparison.OrdinalIgnoreCase) ||
-                    t.FullName?.Equals(typeName, StringComparison.OrdinalIgnoreCase) == true);
-                if (type != null) return type;
-            }
-            
+
+            BuildTypeIndex();
+
+            if (_typeByFullName.TryGetValue(typeName, out type)) return type;
+            if (_typeByShortName.TryGetValue(typeName, out type)) return type;
+
             return null;
+        }
+
+        /// <summary>짧은 이름이 여러 타입과 겹치는지. 응답에 경고를 실을 때 쓴다.</summary>
+        private static bool IsAmbiguousTypeName(string typeName)
+        {
+            BuildTypeIndex();
+            return _ambiguousShortNames.Contains(typeName);
         }
 
         private static string GetFriendlyTypeName(Type type)
@@ -446,6 +495,7 @@ namespace Community.Unity.MCP
             public string baseType;
             public bool isMonoBehaviour;
             public int propertyCount;
+            public string note;   // 짧은 타입 이름이 여러 타입과 겹칠 때 경고
             public PropertySchema[] properties;
         }
 
