@@ -121,6 +121,14 @@ function slimToolList(tools) {
                 slim.readOnlyHint = true;              // 기본 false 와 다르므로 명시
             } else if (a.destructiveHint === false) {
                 slim.destructiveHint = false;          // 기본 true 와 다르므로 명시
+            } else {
+                // 기본값과 같지만 일부러 싣는다. 생략 규칙을 여기서만 깨는 이유:
+                // 기본값을 생략하면 읽는 쪽이 기본값을 적용해야 뜻이 보존되는데, 그걸 안 하는
+                // 클라이언트가 있을 때 방향이 문제다. readOnlyHint 를 빼면 최악이 "안전한 툴을
+                // 한 번 더 확인"(과잉 경고)이고, destructiveHint 를 빼면 최악이 "파괴적 툴을 경고 없이
+                // 실행"(과소 경고)이다. 후자는 되돌릴 수 없다.
+                // 2026-08-23 실측: 이 10개를 명시하는 비용은 390 B (전체 37 KB 의 1.1%).
+                slim.destructiveHint = true;
             }
             if (a.idempotentHint) slim.idempotentHint = true;
             if (Object.keys(slim).length > 0) tool.annotations = slim;
