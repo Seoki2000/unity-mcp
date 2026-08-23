@@ -271,7 +271,7 @@ function toolDefinitions() {
     },
     {
       name: 'unity_find_references',
-      description: 'Find assets that reference the given asset, by GUID reverse-index over text-serialized Unity assets. Accepts an asset path or a 32-char GUID. O(1) lookup instead of scanning every asset with GetDependencies. Scope: only the file types in scannedExtensions (reported when the result is 0) — for an authoritative answer on whether an asset is unreferenced, use unity_search_project with searchType=reference.',
+      description: 'Find assets that reference the given asset, by GUID reverse-index over text-serialized Unity assets. Accepts an asset path or a 32-char GUID. O(1) lookup instead of scanning every asset with GetDependencies. Scope: only the file types in scannedExtensions, reported when the result is 0. No single source is complete — this index misses asset types outside that list, while Unity own GetDependencies misses VFX Graph internal references (measured). Cross-check both before deciding an asset is unused.',
       inputSchema: {
         type: 'object',
         properties: {

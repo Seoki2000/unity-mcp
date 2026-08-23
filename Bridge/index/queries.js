@@ -123,8 +123,11 @@ function findReferences(index, args) {
       scannedExtensions: scannedExtensions(),
       note: 'totalCount is 0. This index reads GUID references only from the file types listed in ' +
             'scannedExtensions; a third-party asset type outside that list would not be seen. ' +
-            'Before concluding an asset is unreferenced, confirm with unity_search_project ' +
-            '(searchType=reference), which uses Unity own dependency database.',
+            'Cross-check with unity_search_project (searchType=reference) before concluding an asset ' +
+            'is unreferenced — but note that neither source is complete on its own. Measured 2026-08-23: ' +
+            'Unity AssetDatabase.GetDependencies does NOT report VFX Graph internal references, so it ' +
+            'returns 0 for .shadergraph and .vfxblock assets that .vfx files do reference, where this ' +
+            'index finds them. Treat a zero from either side as unproven, not as proof of no reference.',
     } : {}),
   };
 }
