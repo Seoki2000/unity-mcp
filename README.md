@@ -7,6 +7,51 @@
 *Read this in other languages: [한국어](README_ko.md)*
 A **Model Context Protocol (MCP)** server for Unity that enables AI agents to **query and control** the Unity Editor. This local-optimized version is enhanced with additional tools for Behavior Trees, Window Management, and advanced GameObject/Hierarchy manipulation.
 
+## Fork dev build — dev-0.0.1
+
+This fork (`Seoki2000/unity-mcp`, branch `optimized`) diverges from upstream. Numbers below
+are measured against a live Unity editor, not estimated. Full record in Korean:
+[README_ko.md](README_ko.md#포크-개발-버전--dev-001).
+
+Package version: `2.3.0-dev.0.0.1` · baseline commit: `5331a34`
+
+**Added since the previously pinned `2ea969e`:** path-escape guard and session-token auth;
+tool annotations, pagination and response caps; an out-of-process project index (reverse
+reference lookup, assembly symbols with PDB source mapping, IL call graph — 8 bridge-side
+tools); 6 Behavior authoring tools reclaimed from the game repo; a bridge launcher that
+resolves `PackageCache` at run time. Tools: **67 → 81**, none removed.
+
+**`tools/list` fixed cost went up, not down.**
+
+| State | Bytes | Tools | Per tool |
+|---|---|---|---|
+| `2ea969e` | 24,968 | 67 | 372.7 |
+| dev-0.0.1 before diet | 40,376 | 81 | 498.5 |
+| **dev-0.0.1 now** | **37,067** | **81** | **457.6** |
+
+That is **+48.5%** over the old pin — roughly +3,000 tokens per session. dev-0.0.1 claws
+back 3,309 B of it losslessly by omitting annotation hints that equal the MCP spec defaults.
+Note `destructiveHint` defaults to **true**, so omitting a `false` would flip a safe tool
+into a destructive one; only `false` is emitted and `true` is dropped, and the bridge's own
+retry logic was fixed to apply spec defaults (verified equivalent across all 8 combinations).
+
+Cutting tools is a weak lever: the average tool costs 497 B, about 1.2% of the payload.
+`inputSchema` is 56.7% of it and parameter descriptions are 26.6% — but those are what make
+the tools usable, so they were left alone.
+
+**Index coverage bug fixed in dev-0.0.1.** Windows junctions report `isDirectory() == false`
+and `isSymbolicLink() == true` from `readdirSync`, so the scanner's two branches both missed
+them and skipped entire trees. Unity follows junctions, so those assets are part of the
+project. In this project `Assets/50.Art` is a junction holding 35% of the project's `.meta`
+files. After the fix: `.meta` 2,037 → 3,142, YAML 783 → 1,131, reference edges 4,355 → 5,586,
+and `unity_find_missing_scripts` went from 9 broken GUIDs to 13 (cross-checked against an
+independent scan). Unfollowable links are now counted in `skipped` instead of vanishing.
+
+**Known limits:** no incremental index refresh (call `unity_index_rebuild` after asset
+changes); `totalReferenceCount` counts (asset, GUID) pairs, not raw occurrences;
+`unity_find_callers` indexes project-internal calls only and merges overloads under
+`Type::Method`; `tools/list` is still larger than in `2ea969e`.
+
 ## What is MCP?
 MCP is an open standard by Anthropic that allows AI systems to access external tools and data. This package turns Unity into an MCP server, letting AI assistants like **Antigravity**, **Claude**, and **Cursor** seamlessly query your scenes, modify assets, and execute editor commands.
 
