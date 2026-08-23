@@ -100,8 +100,15 @@ git update-index --skip-worktree Packages/manifest.json Packages/packages-lock.j
 ## 현재 브랜치
 
 - `main` — 업스트림 계보. **McpJobStore / McpToolError 가 없다.** 쓰지 말 것
-- `optimized` — 실제 작업 브랜치. 토큰 최적화 + 스레딩/리로드 안정화. 프로젝트가 핀으로 쓰던 `2ea969e`
-- `security/phase0a` — 현재 작업. `optimized` 기반, 경로 탈출·CORS·인증·메뉴 게이팅·요청 크기 상한
+- `optimized` — **정본이자 안정 브랜치.** 게임 프로젝트의 핀이 여기서 도달 가능한
+  커밋을 가리킨다. 토큰 최적화·스레딩/리로드 안정화부터 Phase 0-A 보안, 컨텍스트
+  위생, 아웃프로세스 프로젝트 인덱스, IL 호출 그래프까지 전부 들어와 있다
+- `security/phase0a`, `feature/ai-project-index` — `optimized` 로 fast-forward
+  머지 완료. 커밋이 전부 `optimized` 에 들어갔으므로 지워도 된다
+
+핀은 브랜치 이름이 아니라 커밋 SHA 로 박는다. 그 SHA 는 **안정 브랜치에서 도달
+가능해야** 한다 — feature 브랜치에만 얹혀 있던 커밋을 가리킨 채 그 브랜치를 지우면,
+팀원 Unity 가 패키지를 해석하지 못한다.
 
 ## 오프라인 컴파일 검증
 

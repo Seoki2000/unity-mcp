@@ -1,8 +1,9 @@
 # 작업 인수 (다음 세션용)
 
 최종 갱신: 2026-08-23
-브랜치: `feature/ai-project-index` (HEAD `783589c`)
-기반: `origin/optimized` (`2ea969e`) — **`main` 이 아니다. §1 주의사항 참조**
+브랜치: `optimized` (HEAD `9d420e6`) — `feature/ai-project-index` 를 fast-forward
+머지해 정본으로 합쳤다. 게임 프로젝트의 핀이 이 커밋을 가리킨다.
+**`main` 이 아니다. §1 주의사항 참조**
 
 ---
 
