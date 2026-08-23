@@ -68,7 +68,8 @@ function cachePath(root) {
 
 // 4: YAML_EXT 확장 (2026-08-23). 구 캐시는 6종만 훑은 것이라 참조 커버리지가 부족하다.
 //    버전을 올려 자동으로 폐기시킨다 — 안 올리면 수정이 재빌드 전까지 안 먹는다.
-const CACHE_VERSION = 4;
+// 5: 캐시 지문 추가 (2026-08-23). 이전 캐시에는 fingerprint 가 없어 유효성 검사가 불가능하다.
+const CACHE_VERSION = 5;
 
 function saveCache(index) {
   try {
@@ -77,6 +78,8 @@ function saveCache(index) {
       root: index.root,
       includePackageCache: index.includePackageCache,
       builtAt: new Date().toISOString(),
+      // 디스크 상태 지문. 로드 시 다시 계산해 대조한다 — 어긋나면 캐시를 버린다.
+      fingerprint: index.fingerprint || null,
       guidCoverage: index.guidCoverage,
       stats: index.stats,
       guidToPath: [...index.guidToPath],
@@ -103,6 +106,21 @@ function loadCache(root) {
   try {
     const raw = JSON.parse(fs.readFileSync(cachePath(root), 'utf8'));
     if (!raw || raw.version !== CACHE_VERSION || raw.root !== root) return null;
+
+    // version 과 root 만 보던 검사에 지문 대조를 더한다. 그것만 보면 에셋이 바뀐 뒤에도
+    // 낡은 인덱스를 계속 서빙하고, 질의는 조용히 틀린 답을 낸다 — 쓰는 쪽이 알 방법이 없다.
+    // 어긋나면 null 을 돌려 호출부가 전체 재빌드로 넘어가게 한다 (이 프로젝트에서 1.1 초).
+    if (!raw.fingerprint) return null;   // 지문 없는 구 캐시
+    const nowFp = scan.fingerprint(root, { includePackageCache: !!raw.includePackageCache });
+    const oldFp = raw.fingerprint;
+    if (oldFp.hash === undefined) return null;   // 해시 없는 구 지문
+    if (nowFp.metaFiles !== oldFp.metaFiles || nowFp.yamlFiles !== oldFp.yamlFiles ||
+        nowFp.totalBytes !== oldFp.totalBytes || nowFp.hash !== oldFp.hash) {
+      log(`cache stale — rebuilding (meta ${oldFp.metaFiles}->${nowFp.metaFiles}, ` +
+          `yaml ${oldFp.yamlFiles}->${nowFp.yamlFiles}, bytes ${oldFp.totalBytes}->${nowFp.totalBytes}, ` +
+          `hash ${oldFp.hash}->${nowFp.hash})`);
+      return null;
+    }
 
     const guidToPath = new Map(raw.guidToPath);
     const pathToGuid = new Map();

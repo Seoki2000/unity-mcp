@@ -179,6 +179,57 @@ function buildYamlIndex(root, yamlFiles) {
  * @param {object} opts
  * @param {boolean} opts.includePackageCache  Library/PackageCache 도 .meta 스캔에 포함 (느리다)
  */
+// 캐시가 지금 디스크 상태와 맞는지 판단할 지문.
+// 캐시 검사가 version 과 root 만 보고 있었다 — 에셋이 바뀌어도 낡은 답을 조용히 계속 냈다.
+// 완전한 증분 갱신은 아니다. 어긋난 것을 감지해 전체 재빌드로 넘기는 것이 목적이다
+// (전체 재빌드가 이 프로젝트에서 1.1 초라 그 편이 단순하고 확실하다).
+// 파일 하나의 (mtime, size) 를 32비트로 접는다. 합으로 누적하므로 순서에 무관하다
+// (readdir 순서는 파일시스템이 정하는 것이라 의존하면 안 된다).
+function foldFile(mtimeMs, size) {
+  let x = (Math.floor(mtimeMs) ^ Math.imul(size, 2654435761)) | 0;
+  x = (x ^ (x >>> 15)) | 0;
+  return x;
+}
+
+function fingerprintFrom(metaFiles, yamlFiles) {
+  let maxMtimeMs = 0;
+  let totalBytes = 0;
+  let counted = 0;
+  // 최댓값 mtime 만으로는 부족하다. 실측(2026-08-23): 가장 새로운 파일보다 오래된 파일의
+  // mtime 을 바꿔도 max 는 그대로여서 감지되지 않았다. 파일별 해시를 합산해야 어느 파일이
+  // 어느 방향으로 바뀌어도 지문이 달라진다.
+  let hash = 0;
+  for (const list of [metaFiles, yamlFiles]) {
+    for (const f of list) {
+      try {
+        const st = fs.statSync(f);
+        if (st.mtimeMs > maxMtimeMs) maxMtimeMs = st.mtimeMs;
+        totalBytes += st.size;
+        hash = (hash + foldFile(st.mtimeMs, st.size)) | 0;
+        counted++;
+      } catch { /* 사라진 파일 — 개수 차이로 잡힌다 */ }
+    }
+  }
+  return {
+    metaFiles: metaFiles.length,
+    yamlFiles: yamlFiles.length,
+    counted,
+    maxMtimeMs: Math.round(maxMtimeMs),
+    totalBytes,
+    hash,
+  };
+}
+
+/** 인덱스를 만들지 않고 지문만 계산한다. 캐시 유효성 검사용. */
+function fingerprint(root, opts = {}) {
+  const assetRoots = [path.join(root, 'Assets')];
+  const metaRoots = [path.join(root, 'Assets'), path.join(root, 'Packages')];
+  if (opts.includePackageCache) metaRoots.push(path.join(root, 'Library', 'PackageCache'));
+  const assetFiles = collectFiles(assetRoots);
+  const metaFiles = collectFiles(metaRoots);
+  return fingerprintFrom(metaFiles.metas, assetFiles.yamls);
+}
+
 function buildIndex(root, opts = {}) {
   const t0 = Date.now();
 
@@ -211,6 +262,8 @@ function buildIndex(root, opts = {}) {
     guidCoverage: opts.includePackageCache ? 'full' : 'assets',
     // 질의가 0 을 답할 때 "안 본 확장자였나" 를 판단할 근거.
     yamlExtensions: [...YAML_EXT].sort(),
+    // 캐시 유효성 검사용. 여기서 계산해 두면 저장 시 다시 훑지 않는다.
+    fingerprint: fingerprintFrom(metaFiles.metas, assetFiles.yamls),
     guidToPath: meta.guidToPath,
     pathToGuid: meta.pathToGuid,
     refs: yaml.refs,
@@ -268,4 +321,7 @@ function mergePackageCacheGuids(index) {
   return index;
 }
 
-module.exports = { buildIndex, collectFiles, buildMetaIndex, mergePackageCacheGuids, YAML_EXT, rel };
+module.exports = {
+  buildIndex, collectFiles, buildMetaIndex, mergePackageCacheGuids,
+  fingerprint, fingerprintFrom, YAML_EXT, rel,
+};
