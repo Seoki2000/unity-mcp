@@ -2,7 +2,13 @@
 // 인덱스 위의 질의. 전부 맵 조회이므로 sub-ms 다.
 // 비교: 인덱스 없는 현재 구현은 역참조 1건에 2,425 ms 이고 에디터 메인 스레드를 점유한다.
 
+const { YAML_EXT } = require('./scan');
+
 const GUID_RE = /^[0-9a-f]{32}$/;
+
+// 인덱스가 훑은 확장자. 캐시에서 복원된 인덱스에도 값이 있어야 하므로 index 객체가 아니라
+// 모듈 상수에서 읽는다.
+function scannedExtensions() { return [...YAML_EXT].sort(); }
 
 /** 질의 문자열을 GUID 로 해석한다. 경로/GUID 모두 받는다. */
 function resolveGuid(index, target) {
@@ -111,6 +117,15 @@ function findReferences(index, args) {
     nextOffset: page.nextOffset,
     truncated: page.truncated,
     references: page.items,
+    // 0 은 두 가지 뜻이 될 수 있다 — 정말 참조가 없거나, 참조하는 파일 종류를 안 봤거나.
+    // 구분이 안 되면 "미사용이니 지워도 된다" 로 잘못 읽힌다. 그래서 0 일 때만 근거를 싣는다.
+    ...(page.total === 0 ? {
+      scannedExtensions: scannedExtensions(),
+      note: 'totalCount is 0. This index reads GUID references only from the file types listed in ' +
+            'scannedExtensions; a third-party asset type outside that list would not be seen. ' +
+            'Before concluding an asset is unreferenced, confirm with unity_search_project ' +
+            '(searchType=reference), which uses Unity own dependency database.',
+    } : {}),
   };
 }
 
@@ -320,6 +335,7 @@ function status(index, meta) {
     projectRoot: index ? index.root : null,
     guidCoverage: index ? index.guidCoverage : null,
     includePackageCache: index ? index.includePackageCache : null,
+    scannedExtensions: scannedExtensions(),
     builtAt: meta.builtAt || null,
     fromCache: !!meta.fromCache,
     stats: index ? index.stats : null,

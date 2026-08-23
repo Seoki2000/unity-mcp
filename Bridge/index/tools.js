@@ -66,7 +66,9 @@ function cachePath(root) {
   return path.join(os.homedir(), '.unity-mcp', `index-${key}.json`);
 }
 
-const CACHE_VERSION = 3;
+// 4: YAML_EXT 확장 (2026-08-23). 구 캐시는 6종만 훑은 것이라 참조 커버리지가 부족하다.
+//    버전을 올려 자동으로 폐기시킨다 — 안 올리면 수정이 재빌드 전까지 안 먹는다.
+const CACHE_VERSION = 4;
 
 function saveCache(index) {
   try {
@@ -269,7 +271,7 @@ function toolDefinitions() {
     },
     {
       name: 'unity_find_references',
-      description: 'Find every asset that references the given asset. Accepts an asset path or a 32-char GUID. Index-backed: O(1) lookup instead of scanning every asset with GetDependencies.',
+      description: 'Find assets that reference the given asset, by GUID reverse-index over text-serialized Unity assets. Accepts an asset path or a 32-char GUID. O(1) lookup instead of scanning every asset with GetDependencies. Scope: only the file types in scannedExtensions (reported when the result is 0) — for an authoritative answer on whether an asset is unreferenced, use unity_search_project with searchType=reference.',
       inputSchema: {
         type: 'object',
         properties: {

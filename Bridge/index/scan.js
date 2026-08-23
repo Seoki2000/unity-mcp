@@ -11,7 +11,26 @@ const path = require('path');
 
 // YAML 텍스트 직렬화를 쓰는 에셋 확장자.
 // ⚠️ Force Binary 직렬화 모드 프로젝트에서는 이 스캔이 동작하지 않는다(Phase 1.5 §6).
-const YAML_EXT = new Set(['.prefab', '.unity', '.asset', '.mat', '.controller', '.anim']);
+// 텍스트 직렬화된 Unity 자산 중 `guid: <32hex>` 형태의 참조를 담는 확장자.
+// 2026-08-23 실측: 이 목록이 6종이던 때 이 프로젝트에서 GUID 참조 4,550건이 인덱스 밖에
+// 있었다 (.vfx 4,085 / .vfxblock 294 / .mixer 89 / .vfxoperator 80 / .lighting 1).
+// 그 결과 실제로 참조되는 에셋 10건에 unity_find_references 가 totalCount: 0 을 오류도
+// 경고도 없이 답했다. 목록을 늘려도 스캔 대상은 4.7 MB 만 늘어난다 (132.9 MB 대비 3.5%).
+//
+// 그래도 이 목록은 원리적으로 불완전하다 — 서드파티 패키지는 자기 확장자를 쓴다.
+// 그래서 질의 결과가 0 일 때 이 목록을 함께 실어 "없음" 과 "안 봤음" 을 구분한다.
+const YAML_EXT = new Set([
+  '.prefab', '.unity', '.asset', '.mat', '.controller', '.anim',
+  '.vfx', '.vfxblock', '.vfxoperator',           // VFX Graph
+  '.mixer',                                      // 오디오 믹서
+  '.lighting', '.giparams',                      // 라이팅
+  '.overridecontroller', '.mask',                // 애니메이션
+  '.physicmaterial',                             // 물리
+  '.playable', '.signal',                        // 타임라인
+  '.spriteatlas', '.spriteatlasv2',              // 스프라이트 아틀라스
+  '.terrainlayer', '.shadervariants',
+  '.preset', '.guiskin', '.fontsettings',
+]);
 
 // .meta 의 guid 는 파일 앞부분에 있다. 전체를 읽지 않고 앞 400 바이트만 본다.
 const META_HEAD_BYTES = 400;
@@ -190,6 +209,8 @@ function buildIndex(root, opts = {}) {
     // 'assets'  = Assets + Packages 만 스캔 (Missing Script 판정에 불충분)
     // 'full'    = PackageCache 까지 포함 (판정 가능)
     guidCoverage: opts.includePackageCache ? 'full' : 'assets',
+    // 질의가 0 을 답할 때 "안 본 확장자였나" 를 판단할 근거.
+    yamlExtensions: [...YAML_EXT].sort(),
     guidToPath: meta.guidToPath,
     pathToGuid: meta.pathToGuid,
     refs: yaml.refs,
