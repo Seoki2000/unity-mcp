@@ -83,6 +83,20 @@ git update-index --skip-worktree Packages/manifest.json Packages/packages-lock.j
    새 해시로 올려서 게임 레포에 커밋한다 (그때는 skip-worktree 를 잠시 해제해야 한다)
 3. 내 로컬은 계속 `file:` 참조를 쓰므로 push 하지 않은 작업도 즉시 테스트된다
 
+## MCP 서버 등록 — 런처는 이 패키지 안에 있다
+
+`Bridge/mcp-bridge-launcher.js` 가 정본이다. 브릿지(`Bridge/mcp-bridge.js`)를 설정에서
+직접 가리키면 패키지 핀을 갱신할 때마다 `PackageCache` 폴더명이 바뀌어 경로가 조용히 깨진다.
+런처는 실행 시점에 브릿지를 찾으므로 그 문제를 없앤다.
+
+- **로컬 개발** — 클론 경로가 고정이므로 이 파일을 그대로 등록한다
+  (`~/.claude.json` 의 `args` 에 `C:/dev/unity-mcp/Bridge/mcp-bridge-launcher.js`)
+- **git URL 핀으로 소비하는 팀원** — 이 파일이 `PackageCache` 안에 놓여 경로가 핀마다 바뀐다.
+  런처만 한 번 고정 경로로 복사해 그 사본을 등록한다. 런처 사본은 낡아도 무해하다 —
+  실행 시점에 실제 브릿지를 다시 찾기 때문이다. **브릿지 사본은 절대 두지 말 것** (조용히 낡는다)
+
+자세한 근거는 런처 파일 머리말에 있다.
+
 ## 현재 브랜치
 
 - `main` — 업스트림 계보. **McpJobStore / McpToolError 가 없다.** 쓰지 말 것
