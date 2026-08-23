@@ -13,6 +13,7 @@ const os = require('os');
 
 const scan = require('./scan');
 const symbols = require('./symbols');
+const callgraph = require('./callgraph');
 const queries = require('./queries');
 
 const PREFIX = 'unity_index_';   // 상태/재빌드 도구
@@ -23,6 +24,8 @@ const LOCAL_TOOL_NAMES = new Set([
   'unity_find_component_usages',
   'unity_find_missing_scripts',
   'unity_get_type_symbols',
+  'unity_find_callers',
+  'unity_find_callees',
 ]);
 
 let _index = null;
@@ -63,7 +66,7 @@ function cachePath(root) {
   return path.join(os.homedir(), '.unity-mcp', `index-${key}.json`);
 }
 
-const CACHE_VERSION = 2;
+const CACHE_VERSION = 3;
 
 function saveCache(index) {
   try {
@@ -77,6 +80,10 @@ function saveCache(index) {
       guidToPath: [...index.guidToPath],
       refs: [...index.refs].map(([g, s]) => [g, [...s]]),
       scriptRefs: [...index.scriptRefs].map(([g, s]) => [g, [...s]]),
+      callGraph: index.callGraph ? {
+        stats: index.callGraph.stats,
+        callsFrom: [...index.callGraph.callsFrom].map(([k, v]) => [k, [...v]]),
+      } : null,
       symbols: index.symbols ? {
         stats: index.symbols.stats,
         assemblies: index.symbols.assemblies,
@@ -119,10 +126,26 @@ function loadCache(root) {
               assemblies: raw.symbols.assemblies || [], stats: raw.symbols.stats || {} };
     }
 
+    let cg = null;
+    if (raw.callGraph && Array.isArray(raw.callGraph.callsFrom)) {
+      const callsFrom = new Map(raw.callGraph.callsFrom.map(([k, v]) => [k, new Set(v)]));
+      // 역방향은 저장하지 않고 로드 시 재구성한다(캐시 크기 절반).
+      const callersOf = new Map();
+      for (const [from, tos] of callsFrom) {
+        for (const to of tos) {
+          let c = callersOf.get(to);
+          if (!c) callersOf.set(to, c = new Set());
+          c.add(from);
+        }
+      }
+      cg = { callsFrom, callersOf, perAssembly: [], stats: raw.callGraph.stats || {} };
+    }
+
     return {
       root,
       includePackageCache: raw.includePackageCache,
       guidCoverage: raw.guidCoverage || 'assets',
+      callGraph: cg,
       guidToPath,
       pathToGuid,
       refs: new Map(raw.refs.map(([g, a]) => [g, new Set(a)])),
@@ -192,6 +215,20 @@ function ensureIndex(port, force, includePackageCache, cacheOnly) {
     log(`layer B built in ${sym.stats.msTotal}ms — ${sym.stats.userAssemblies} user assemblies, ` +
         `${sym.stats.types} types, ${sym.stats.sourceFilesMapped} source files mapped` +
         (sym.stats.failedAssemblies ? `, ${sym.stats.failedAssemblies} failed` : ''));
+
+    // 레이어 B-2 — IL 본문 디코딩으로 호출 그래프. 심볼 인덱스가 있어야 한다(타입 필터).
+    try {
+      const cg = callgraph.buildCallGraph(_projectRoot, sym);
+      _index.callGraph = cg;
+      _index.stats.callGraph = cg.stats;
+      log(`call graph built in ${cg.stats.msTotal}ms — ${cg.stats.edges} edges, ` +
+          `${cg.stats.methodsDecoded} methods decoded` +
+          (cg.stats.methodsFailed ? `, ${cg.stats.methodsFailed} undecodable` : ''));
+    } catch (e) {
+      log(`call graph unavailable: ${e.message}`);
+      _index.callGraph = null;
+      _index.stats.callGraphError = e.message;
+    }
   }
 
   _meta = { builtAt: new Date().toISOString(), fromCache: false };
@@ -270,6 +307,32 @@ function toolDefinitions() {
       annotations: ro,
     },
     {
+      name: 'unity_find_callers',
+      description: "Find every project method that actually calls the given method, decoded from compiled IL. Unlike a text search this excludes comments, declarations and string matches — answers \"can I safely rename this?\". Accepts 'Type::Method', 'Type.Method', or a bare method name if unambiguous.",
+      inputSchema: {
+        type: 'object',
+        properties: {
+          method: { type: 'string', description: "e.g. 'BaseAttack::TryResolveHit' or just 'TryResolveHit'" },
+          ...paging,
+        },
+        required: ['method'],
+      },
+      annotations: ro,
+    },
+    {
+      name: 'unity_find_callees',
+      description: 'Find every project method the given method calls, decoded from compiled IL. Calls into UnityEngine/BCL are intentionally excluded to keep the graph focused on project code.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          method: { type: 'string', description: "e.g. 'PlayerDefaultAttack::HitOverlap'" },
+          ...paging,
+        },
+        required: ['method'],
+      },
+      annotations: ro,
+    },
+    {
       name: 'unity_find_missing_scripts',
       description: 'Find assets whose components reference a script that no longer exists (Editor shows "The associated script can not be loaded"). Found by joining serialized m_Script GUIDs against .meta files.',
       inputSchema: { type: 'object', properties: { ...paging }, required: [] },
@@ -309,6 +372,8 @@ function callLocalTool(name, args, port) {
   if (name === 'unity_find_references') result = queries.findReferences(idx, a);
   else if (name === 'unity_find_component_usages') result = queries.findComponentUsages(idx, a);
   else if (name === 'unity_get_type_symbols') result = queries.getTypeSymbols(idx, a);
+  else if (name === 'unity_find_callers') result = queries.findCallers(idx, a);
+  else if (name === 'unity_find_callees') result = queries.findCallees(idx, a);
   else if (name === 'unity_find_missing_scripts') {
     // Missing Script 판정에는 전체 GUID 커버리지가 필수다.
     // Assets/Packages 만으로 판정하면 패키지 스크립트가 전부 'missing' 으로 잡힌다
@@ -324,7 +389,8 @@ function callLocalTool(name, args, port) {
   }
   else return err(`Unknown local tool: ${name}`);
 
-  if (result && result.error) return err(result.error);
+  // 에러 응답도 부가 필드(candidates 등)를 유지해야 한다 — AI 가 후보를 보고 다시 물을 수 있다.
+  if (result && result.error) return errWith(result);
   return ok(result);
 }
 
@@ -333,6 +399,10 @@ function ok(obj) {
 }
 function err(message) {
   return { content: [{ type: 'text', text: JSON.stringify({ error: message }) }], isError: true };
+}
+/** error 를 포함한 객체 전체를 그대로 실어 보낸다(candidates 등 부가 정보 보존). */
+function errWith(obj) {
+  return { content: [{ type: 'text', text: JSON.stringify(obj) }], isError: true };
 }
 
 module.exports = { isLocalTool, toolDefinitions, callLocalTool, ensureIndex, setLogger, PREFIX };

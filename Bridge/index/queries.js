@@ -227,6 +227,92 @@ function findMissingScripts(index, args) {
   };
 }
 
+
+/**
+ * 메서드 키를 해석한다. "Type::Method" / "Type.Method" / "Method" 를 모두 받는다.
+ * 후보가 여러 개면 고르지 않고 돌려준다.
+ */
+function resolveMethodKey(index, query) {
+  const cg = index.callGraph;
+  if (!cg) return { error: 'Call graph not built. Run unity_index_rebuild.' };
+
+  const q = String(query || '').trim();
+  if (!q) return { error: 'method is required' };
+
+  const allKeys = new Set([...cg.callsFrom.keys(), ...cg.callersOf.keys()]);
+
+  if (allKeys.has(q)) return { key: q };
+
+  // "Type.Method" 형태 → 마지막 점을 :: 로
+  const dot = q.lastIndexOf('.');
+  if (dot > 0) {
+    const alt = q.slice(0, dot) + '::' + q.slice(dot + 1);
+    if (allKeys.has(alt)) return { key: alt };
+  }
+
+  // 메서드 이름만 준 경우 — 끝이 ::name 인 키를 모은다
+  const suffix = '::' + q;
+  const matches = [...allKeys].filter(k => k.endsWith(suffix));
+  if (matches.length === 1) return { key: matches[0] };
+  if (matches.length > 1) {
+    return {
+      error: `'${q}' matches ${matches.length} methods. Pass 'Type::Method'.`,
+      candidates: matches.sort().slice(0, 25),
+    };
+  }
+
+  return { error: `Method '${q}' not found in the call graph (project code only; calls into UnityEngine/BCL are not indexed).` };
+}
+
+/**
+ * 이 메서드를 호출하는 메서드들.
+ *
+ * grep 과의 차이 — 실측 예: BaseAttack::TryResolveHit 을 grep 하면 20건이 나오는데
+ * 그중 4건은 주석이고 나머지에는 선언과 오버로드 내부 연쇄가 섞여 있다.
+ * 호출 그래프는 실제 호출자 8개만 준다.
+ */
+function findCallers(index, args) {
+  const r = resolveMethodKey(index, args.method);
+  if (r.error) return r;
+
+  const set = index.callGraph.callersOf.get(r.key);
+  const callers = set ? [...set].sort() : [];
+  const page = pageOf(callers, args.offset, args.maxResults);
+
+  return {
+    method: r.key,
+    totalCount: page.total,
+    returnedCount: page.items.length,
+    offset: page.offset,
+    nextOffset: page.nextOffset,
+    truncated: page.truncated,
+    callers: page.items,
+    note: 'Overloads share one key (Type::Method), so callers of all overloads are merged. ' +
+          'Only calls from project (user assembly) code are indexed.',
+  };
+}
+
+/** 이 메서드가 호출하는 메서드들. */
+function findCallees(index, args) {
+  const r = resolveMethodKey(index, args.method);
+  if (r.error) return r;
+
+  const set = index.callGraph.callsFrom.get(r.key);
+  const callees = set ? [...set].sort() : [];
+  const page = pageOf(callees, args.offset, args.maxResults);
+
+  return {
+    method: r.key,
+    totalCount: page.total,
+    returnedCount: page.items.length,
+    offset: page.offset,
+    nextOffset: page.nextOffset,
+    truncated: page.truncated,
+    callees: page.items,
+    note: 'Calls into UnityEngine/BCL are intentionally not indexed — only project-internal targets.',
+  };
+}
+
 /** 인덱스 상태/통계. */
 function status(index, meta) {
   return {
@@ -310,4 +396,5 @@ function getTypeSymbols(index, args) {
   };
 }
 
-module.exports = { findReferences, findComponentUsages, findMissingScripts, getTypeSymbols, status, resolveGuid, resolveScriptType };
+module.exports = { findReferences, findComponentUsages, findMissingScripts, getTypeSymbols,
+                   findCallers, findCallees, status, resolveGuid, resolveScriptType };
