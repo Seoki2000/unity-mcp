@@ -17,7 +17,7 @@ namespace Community.Unity.MCP
         private const string RuntimeGraphTypeName = "Unity.Behavior.BehaviorGraph";
         private const string RuntimeBlackboardTypeName = "Unity.Behavior.RuntimeBlackboardAsset";
 
-        [McpTool("unity_behavior_list_graphs", "List Unity Behavior graph and blackboard assets", typeof(ListBehaviorGraphsArgs))]
+        [McpTool("unity_behavior_list_graphs", "List Unity Behavior graph and blackboard assets", typeof(ListBehaviorGraphsArgs), ReadOnly = true)]
         public static object ListBehaviorGraphs(string argsJson)
         {
             var args = JsonUtility.FromJson<ListBehaviorGraphsArgs>(argsJson) ?? new ListBehaviorGraphsArgs();
@@ -71,7 +71,7 @@ namespace Community.Unity.MCP
             return new ListBehaviorGraphsResult { count = results.Count, assets = results.ToArray() };
         }
 
-        [McpTool("unity_behavior_get_graph", "Read a Unity Behavior authoring graph asset", typeof(GetBehaviorGraphArgs))]
+        [McpTool("unity_behavior_get_graph", "Read a Unity Behavior authoring graph asset", typeof(GetBehaviorGraphArgs), ReadOnly = true)]
         public static object GetBehaviorGraph(string argsJson)
         {
             var args = JsonUtility.FromJson<GetBehaviorGraphArgs>(argsJson);

@@ -108,7 +108,10 @@ namespace Community.Unity.MCP
             };
         }
 
-        [McpTool("unity_recompile_scripts", "Force recompilation of all scripts. Returns immediately with a jobId; poll unity_get_job_status to await completion across the domain reload.", Idempotent = true)]
+        // Idempotent 를 뗀다. 호출마다 새 jobId 를 만들고 도메인 리로드를 유발하므로 같은 인자로
+        // 두 번 불러도 결과가 같지 않다. 브릿지는 멱등 도구를 연결 끊김 후 재전송하는데,
+        // 그러면 재컴파일이 두 번 제출되고 job 폴링 대상이 어느 것인지 모호해진다.
+        [McpTool("unity_recompile_scripts", "Force recompilation of all scripts. Returns immediately with a jobId; poll unity_get_job_status to await completion across the domain reload.")]
         public static object RecompileScripts(string argsJson)
         {
             if (EditorApplication.isCompiling)
