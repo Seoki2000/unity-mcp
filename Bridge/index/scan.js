@@ -35,6 +35,7 @@ function collectFiles(roots) {
   const metas = [];
   const yamls = [];
   const seenDirs = new Set();
+  const skipped = [];   // 따라갈 수 없던 링크 — 조용히 사라지지 않게 남긴다
 
   function walk(dir) {
     let real;
@@ -47,9 +48,27 @@ function collectFiles(roots) {
 
     for (const e of entries) {
       const p = path.join(dir, e.name);
-      if (e.isDirectory()) {
+      // Windows 정션은 Dirent 에서 isDirectory() 거짓 / isSymbolicLink() 참으로 보고된다.
+      // 두 분기가 모두 거짓이 되어 통째로 건너뛰던 것 — Unity 는 정션을 따라가므로 그 안의
+      // 에셋도 엄연히 프로젝트의 일부인데 인덱스에서만 사라졌다. 아트 폴더를 외부(예:
+      // OneDrive)에 두고 정션으로 붙이는 구성에서는 프로젝트의 3분의 1이 조용히 빠진다.
+      // 링크 순환은 위의 realpath + seenDirs 로 이미 막혀 있어 따라가도 안전하다.
+      let isDir = e.isDirectory();
+      let isFile = e.isFile();
+      if (!isDir && !isFile && e.isSymbolicLink()) {
+        try {
+          const st = fs.statSync(p);   // 링크를 따라가 실체를 본다
+          isDir = st.isDirectory();
+          isFile = st.isFile();
+        } catch {
+          skipped.push(p);             // 끊어진 링크 — 세어서 드러낸다
+          continue;
+        }
+      }
+
+      if (isDir) {
         walk(p);
-      } else if (e.isFile()) {
+      } else if (isFile) {
         if (e.name.endsWith('.meta')) metas.push(p);
         else if (YAML_EXT.has(path.extname(e.name).toLowerCase())) yamls.push(p);
       }
@@ -57,7 +76,7 @@ function collectFiles(roots) {
   }
 
   for (const r of roots) walk(r);
-  return { metas, yamls };
+  return { metas, yamls, skipped };
 }
 
 /**
