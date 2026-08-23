@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Text;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
@@ -62,6 +63,18 @@ namespace Community.Unity.MCP
                 }
 
                 return CreateSuccessResponse(idToken, result);
+            }
+            catch (UnauthorizedAccessException ex)
+            {
+                // 경로 포함 검사(McpPathGuard) 거부. 파싱 실패가 아니므로 -32700 로 뭉개면
+                // 클라이언트/AI 가 "JSON 이 깨졌다"고 오해한다. 잘못된 인자로 보고한다.
+                Debug.LogWarning($"[MCP] Rejected request: {ex.Message}");
+                return CreateErrorResponse(idToken, -32602, ex.Message);
+            }
+            catch (FileNotFoundException ex)
+            {
+                // 존재하지 않는 리소스 — 이것도 파싱 오류가 아니다.
+                return CreateErrorResponse(idToken, -32602, ex.Message);
             }
             catch (Exception ex)
             {

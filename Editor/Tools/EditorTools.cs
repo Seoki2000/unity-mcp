@@ -10,18 +10,66 @@ namespace Community.Unity.MCP
     [McpToolProvider]
     public class EditorTools
     {
-        [McpTool("unity_execute_menu", "Execute a Unity menu item", typeof(ExecuteMenuArgs))]
+        /// <summary>
+        /// unity_execute_menu 를 완전히 끄는 스위치. Window > MCP Server 에서 토글한다.
+        /// </summary>
+        public const string ExecuteMenuEnabledPref = "Community.Unity.MCP.ExecuteMenuEnabled";
+
+        /// <summary>
+        /// 되돌리기 어렵거나 프로젝트/에디터 상태를 크게 바꾸는 메뉴 경로 조각.
+        ///
+        /// ⚠️ 이건 보안 경계가 아니다 — 보안 경계는 McpAuthToken 이다.
+        ///    여기서 막는 것은 "AI 가 임의 메뉴 문자열로 실수로 파괴적 동작을 하는 것"이다.
+        ///    거부 목록은 본질적으로 불완전하므로, 전면 차단이 필요하면 위 EditorPref 로 도구를 끈다.
+        /// </summary>
+        private static readonly string[] BlockedMenuFragments =
+        {
+            "Clear All PlayerPrefs",
+            "Reset Package",
+            "Reset All",
+            "Delete",
+            "Remove",
+            "Quit",
+            "Build And Run",
+            "Build Settings",
+            "Reimport All",
+            "Clear Cache",
+            "Sign Out",
+            "Revert",
+            "Discard",
+        };
+
+        [McpTool("unity_execute_menu", "Execute a Unity menu item. Destructive menu paths are blocked; the tool can be disabled entirely in Window > MCP Server.", typeof(ExecuteMenuArgs))]
         public static object ExecuteMenu(string argsJson)
         {
             var args = JsonUtility.FromJson<ExecuteMenuArgs>(argsJson);
-            
+
             if (string.IsNullOrEmpty(args?.menuPath))
             {
                 return new McpToolError { error = "menuPath parameter is required" };
             }
 
+            if (!EditorPrefs.GetBool(ExecuteMenuEnabledPref, true))
+            {
+                return new McpToolError
+                {
+                    error = "unity_execute_menu is disabled for this project. Enable it in Window > MCP Server if you intend to allow arbitrary menu execution."
+                };
+            }
+
+            foreach (var blocked in BlockedMenuFragments)
+            {
+                if (args.menuPath.IndexOf(blocked, StringComparison.OrdinalIgnoreCase) >= 0)
+                {
+                    return new McpToolError
+                    {
+                        error = $"Menu path '{args.menuPath}' is blocked because it matches the destructive pattern '{blocked}'. Perform this action manually in the Editor if it is intended."
+                    };
+                }
+            }
+
             var result = EditorApplication.ExecuteMenuItem(args.menuPath);
-            
+
             return new ExecuteMenuResult
             {
                 menuPath = args.menuPath,

@@ -28,6 +28,39 @@ function hostHeaderFor(host) {
 // 마지막으로 성공한 도구 목록을 돌려줘 MCP 연결 수립이 Unity 타이밍에 인질로 잡히지 않게 한다.
 const TOOLS_CACHE_PATH = path.join(os.homedir(), '.unity-mcp', 'tools-cache.json');
 
+// 세션 토큰 — Unity(McpAuthToken)가 서버 시작 시 기록한다. 브라우저는 이 파일을 읽을 수 없으므로
+// 헤더를 만들 수 없고, 그래서 사용자가 열어 둔 웹페이지가 이 서버를 호출할 수 없다.
+// 사용자가 창에서 명시적으로 Stop 하면 토큰이 폐기되고 새로 생성되므로, 401 을 받으면 한 번 다시 읽는다.
+const AUTH_TOKEN_HEADER = 'X-Unity-MCP-Token';
+function authTokenPath() {
+    return path.join(os.homedir(), '.unity-mcp', `auth-token-${UNITY_PORT}.json`);
+}
+let cachedAuthToken = null;
+function readAuthToken(forceReload) {
+    if (cachedAuthToken && !forceReload) return cachedAuthToken;
+    try {
+        const parsed = JSON.parse(fs.readFileSync(authTokenPath(), 'utf8'));
+        if (parsed && typeof parsed.token === 'string' && parsed.token.length > 0) {
+            cachedAuthToken = parsed.token;
+            return cachedAuthToken;
+        }
+    } catch (e) { /* 파일 없음 — 구버전 서버이거나 토큰 기록 실패. 헤더 없이 진행한다. */ }
+    cachedAuthToken = null;
+    return null;
+}
+
+// Unity 로 보내는 모든 요청의 공통 헤더. 토큰이 있으면 실어 보낸다.
+function unityHeaders(payloadLength) {
+    const headers = {
+        'Host': hostHeaderFor(currentHost()),
+        'Content-Type': 'application/json',
+        'Content-Length': payloadLength
+    };
+    const token = readAuthToken(false);
+    if (token) headers[AUTH_TOKEN_HEADER] = token;
+    return headers;
+}
+
 // 요청 타임아웃(서버측 큐 타임아웃 30s보다 길게) / 연결거부 재시도 (도메인 리로드 윈도우 커버)
 const REQUEST_TIMEOUT_MS = 45000;
 const RETRY_DELAY_MS = 1500;
@@ -224,7 +257,7 @@ function parseBusyError(data) {
     return null;
 }
 
-function postToUnity(line, requestId, retriesLeft, parsedLine, busyRetriesLeft) {
+function postToUnity(line, requestId, retriesLeft, parsedLine, busyRetriesLeft, authRetried) {
     if (busyRetriesLeft === undefined) busyRetriesLeft = MAX_BUSY_RETRIES;
     let settled = false; // 응답/에러를 정확히 1번만 처리
 
@@ -233,11 +266,7 @@ function postToUnity(line, requestId, retriesLeft, parsedLine, busyRetriesLeft) 
         port: UNITY_PORT,
         path: '/message',
         method: 'POST',
-        headers: {
-            'Host': hostHeaderFor(currentHost()),
-            'Content-Type': 'application/json',
-            'Content-Length': Buffer.byteLength(line)
-        }
+        headers: unityHeaders(Buffer.byteLength(line))
     }, (res) => {
         let data = '';
         res.on('data', chunk => data += chunk);
@@ -245,7 +274,19 @@ function postToUnity(line, requestId, retriesLeft, parsedLine, busyRetriesLeft) 
             if (settled) return;
             settled = true;
 
-            if (res.statusCode !== 200) {
+            if (res.statusCode === 401 && !authRetried) {
+                // 토큰이 회전했을 수 있다(사용자가 Stop 후 재시작). 파일을 다시 읽고 한 번만 재시도한다.
+                const before = cachedAuthToken;
+                const after = readAuthToken(true);
+                if (after && after !== before) {
+                    log('Unity rejected the session token — reloaded token file, retrying once.');
+                    postToUnity(line, requestId, retriesLeft, parsedLine, busyRetriesLeft, true);
+                    return;
+                }
+                log(`Unity returned 401 and no fresh token was available: ${data}`);
+                sendErrorResponse(requestId, -32000,
+                    'Unauthorized by Unity MCP server. Restart the MCP server from the Unity window (Window > MCP Server) to regenerate the session token.');
+            } else if (res.statusCode !== 200) {
                 log(`Unity returned error ${res.statusCode}: ${data}`);
                 sendErrorResponse(requestId, -32000, `Unity HTTP ${res.statusCode}`);
             } else if (data) {
@@ -363,11 +404,7 @@ function heartbeatPing() {
         port: UNITY_PORT,
         path: '/message',
         method: 'POST',
-        headers: {
-            'Host': hostHeaderFor(currentHost()),
-            'Content-Type': 'application/json',
-            'Content-Length': Buffer.byteLength(payload)
-        }
+        headers: unityHeaders(Buffer.byteLength(payload))
     }, (res) => {
         // 본문은 소비만 하고 버린다(stdout 출력 없음).
         res.on('data', () => {});
@@ -397,16 +434,27 @@ function heartbeatPing() {
 function connectSSE() {
     log(`Connecting to Unity at http://${currentHost()}:${UNITY_PORT}/sse`);
 
+    const sseHeaders = {
+        'Host': hostHeaderFor(currentHost()),
+        'Accept': 'text/event-stream'
+    };
+    const sseToken = readAuthToken(false);
+    if (sseToken) sseHeaders[AUTH_TOKEN_HEADER] = sseToken;
+
     const req = http.request({
         hostname: currentHost(),
         port: UNITY_PORT,
         path: '/sse',
         method: 'GET',
-        headers: {
-            'Host': hostHeaderFor(currentHost()),
-            'Accept': 'text/event-stream'
-        }
+        headers: sseHeaders
     }, (res) => {
+        if (res.statusCode === 401) {
+            // 토큰 회전 가능성 — 다시 읽고 재연결한다.
+            log('SSE unauthorized — reloading session token and reconnecting.');
+            readAuthToken(true);
+            setTimeout(connectSSE, 2000);
+            return;
+        }
         if (res.statusCode !== 200) {
             log(`Failed to connect to SSE. Status: ${res.statusCode}`);
             setTimeout(connectSSE, 5000);

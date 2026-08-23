@@ -149,13 +149,17 @@ namespace Community.Unity.MCP
 
         private static McpResourceContent ReadScriptResource(string assetPath)
         {
-            string fullPath = Path.Combine(Application.dataPath.Replace("/Assets", ""), assetPath);
-            
+            // 경로 포함 검사 — 없으면 "../../.." 로 프로젝트 밖 임의 파일을 읽을 수 있다.
+            if (!McpPathGuard.TryResolveAssetPath(assetPath, out string fullPath, out string pathError))
+            {
+                throw new UnauthorizedAccessException(pathError);
+            }
+
             if (!File.Exists(fullPath))
             {
                 throw new FileNotFoundException($"Script not found: {assetPath}");
             }
-            
+
             string content = File.ReadAllText(fullPath);
             
             return new McpResourceContent
@@ -228,13 +232,17 @@ namespace Community.Unity.MCP
 
         private static McpResourceContent ReadFileResource(string assetPath)
         {
-            string fullPath = Path.Combine(Application.dataPath.Replace("/Assets", ""), assetPath);
-            
+            // 가장 위험했던 지점 — unity://file/{임의경로} 로 디스크 어디든 읽혔다.
+            if (!McpPathGuard.TryResolveAssetPath(assetPath, out string fullPath, out string pathError))
+            {
+                throw new UnauthorizedAccessException(pathError);
+            }
+
             if (!File.Exists(fullPath))
             {
                 throw new FileNotFoundException($"File not found: {assetPath}");
             }
-            
+
             string content = File.ReadAllText(fullPath);
             string mimeType = GetMimeType(assetPath);
             

@@ -86,10 +86,15 @@ namespace Community.Unity.MCP
 
         private static void SearchByContent(string query, string folder, List<SearchResult> results, int maxResults, bool caseSensitive)
         {
-            // Get project root path
-            string projectPath = Application.dataPath.Replace("/Assets", "");
-            string fullFolderPath = Path.Combine(projectPath, folder);
-            
+            // 경로 포함 검사 — folder 는 호출자 입력이고 아래에서 SearchOption.AllDirectories 로 재귀 순회한다.
+            // 검사가 없으면 folder="../.." 로 프로젝트 밖 디스크를 훑어 파일 내용을 반환할 수 있다.
+            if (!McpPathGuard.TryResolveAssetPath(folder, out string fullFolderPath, out string pathError))
+            {
+                throw new UnauthorizedAccessException(pathError);
+            }
+
+            string projectPath = McpPathGuard.ProjectRoot;
+
             if (!Directory.Exists(fullFolderPath))
             {
                 return;

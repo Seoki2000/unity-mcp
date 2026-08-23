@@ -114,9 +114,14 @@ namespace Community.Unity.MCP
                 path = "Assets/" + path;
             if (!path.EndsWith(".cs"))
                 path += ".cs";
-            
+
+            // 경로 포함 검사 — StartsWith("Assets") 만으로는 "Assets/../../evil.cs" 를 막지 못한다.
+            // 아래 File.WriteAllText 가 프로젝트 밖 임의 파일 쓰기가 되므로, 폴더 생성 부작용 전에 먼저 거른다.
+            if (!McpPathGuard.TryResolveAssetPath(path, out string fullPath, out string pathError))
+                return new McpToolError { error = pathError };
+
             string className = Path.GetFileNameWithoutExtension(path);
-            
+
             // Ensure directory exists
             string directory = Path.GetDirectoryName(path).Replace('\\', '/');
             if (!AssetDatabase.IsValidFolder(directory))
@@ -130,8 +135,7 @@ namespace Community.Unity.MCP
             
             string content = GenerateScript(className, scriptType, namespaceName);
             
-            // Write file
-            string fullPath = Path.Combine(Application.dataPath.Replace("/Assets", ""), path);
+            // Write file (fullPath 는 위에서 McpPathGuard 검증을 통과한 값)
             File.WriteAllText(fullPath, content);
             
             AssetDatabase.Refresh();
@@ -156,8 +160,14 @@ namespace Community.Unity.MCP
             if (string.IsNullOrEmpty(args?.destinationPath))
                 return new McpToolError { error = "destinationPath parameter is required" };
             
-            if (!File.Exists(Path.Combine(Application.dataPath.Replace("/Assets", ""), args.sourcePath)) &&
-                !AssetDatabase.IsValidFolder(args.sourcePath))
+            // 경로 포함 검사 — 아래 File.Exists 가 프로젝트 밖 파일 존재 여부를 알려주는 오라클이 된다.
+            // 목적지도 함께 검증한다(CreateFolder 부작용 전에).
+            if (!McpPathGuard.TryResolveAssetPath(args.sourcePath, out string sourceFullPath, out string srcError))
+                return new McpToolError { error = srcError };
+            if (!McpPathGuard.TryResolveAssetPath(args.destinationPath, out _, out string dstError))
+                return new McpToolError { error = dstError };
+
+            if (!File.Exists(sourceFullPath) && !AssetDatabase.IsValidFolder(args.sourcePath))
             {
                 return new McpToolError { error = $"Source not found: {args.sourcePath}" };
             }

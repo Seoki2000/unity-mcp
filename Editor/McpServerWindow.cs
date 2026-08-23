@@ -132,6 +132,44 @@ namespace Community.Unity.MCP
                     EditorPrefs.SetInt("MCP_Port", _port);
                 }
             }
+
+            EditorGUILayout.Space(6);
+            EditorGUILayout.LabelField("Security", EditorStyles.boldLabel);
+
+            // 세션 토큰 상태 — 브릿지만 서버를 호출할 수 있는지 한눈에 보여준다.
+            if (isRunning)
+            {
+                if (McpAuthToken.IsEnforced)
+                {
+                    EditorGUILayout.HelpBox(
+                        "Session token active. Only the local bridge (which reads " +
+                        "~/.unity-mcp/auth-token-" + McpServer.Instance.Port + ".json) can call this server. " +
+                        "Browser-origin requests are rejected.",
+                        MessageType.Info);
+                }
+                else
+                {
+                    EditorGUILayout.HelpBox(
+                        "Session token could NOT be written, so requests are not authenticated. " +
+                        "Browser-origin requests are still rejected, but any local process can call this server. " +
+                        "Check write access to your user profile's .unity-mcp folder.",
+                        MessageType.Warning);
+                }
+            }
+
+            bool menuEnabled = EditorPrefs.GetBool(EditorTools.ExecuteMenuEnabledPref, true);
+            bool newMenuEnabled = EditorGUILayout.ToggleLeft(
+                "Allow unity_execute_menu (arbitrary Editor menu execution)", menuEnabled);
+            if (newMenuEnabled != menuEnabled)
+            {
+                EditorPrefs.SetBool(EditorTools.ExecuteMenuEnabledPref, newMenuEnabled);
+            }
+
+            EditorGUILayout.LabelField(
+                newMenuEnabled
+                    ? "Destructive menu paths (Delete, Build, Quit, Clear Cache, ...) are always blocked."
+                    : "unity_execute_menu will return an error for every call.",
+                EditorStyles.miniLabel);
         }
 
         private void DrawControlButtons()

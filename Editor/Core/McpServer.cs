@@ -42,6 +42,12 @@ namespace Community.Unity.MCP
         private const int MaxStartRetries = 10;
 
         /// <summary>
+        /// 요청 본문 상한(바이트). 정상 MCP 요청은 수 KB 규모다. 32MB 면 대형 인자에도 여유가 있고
+        /// 에디터 메모리를 위협하지도 않는다.
+        /// </summary>
+        private const int MaxRequestBodyBytes = 32 * 1024 * 1024;
+
+        /// <summary>
         /// 요청 1건의 생존 상태. 타임아웃/셧다운으로 워커가 대기를 포기하면 Abandoned를 세워
         /// 큐에 남아있던 액션이 뒤늦게 실행되며 부작용을 내는 것을 막는다.
         /// </summary>
@@ -155,6 +161,14 @@ namespace Community.Unity.MCP
             Port = port;
             _shutdownEvent.Reset();
 
+            // 세션 토큰 확보 — 브릿지가 ~/.unity-mcp/auth-token-{port}.json 에서 읽어 헤더로 보낸다.
+            // 리스너를 열기 전에 준비해야 첫 요청부터 인증이 적용된다.
+            if (McpAuthToken.EnsureToken(port) == null)
+            {
+                Debug.LogWarning("[MCP] Session token unavailable — server will accept unauthenticated " +
+                                 "loopback requests. Browser-origin requests are still rejected.");
+            }
+
             try
             {
                 // 'localhost' 프리픽스만 쓰면 Mono HttpListener가 환경에 따라 ::1 한쪽에만 바인딩해
@@ -239,6 +253,11 @@ namespace Community.Unity.MCP
         {
             _userStopped = true;
             Stop();
+
+            // 사용자가 명시적으로 끈 경우에만 토큰을 폐기한다.
+            // 도메인 리로드 경로(Stop)에서는 지우지 않는다 — 매 리로드마다 회전시키면
+            // 브릿지가 계속 401 을 맞고, 리로드 생존 설계(McpJobStore 등)의 의미가 없어진다.
+            McpAuthToken.Clear(Port);
         }
 
         /// <summary>
@@ -376,16 +395,26 @@ namespace Community.Unity.MCP
             var request = context.Request;
             var response = context.Response;
 
-            // CORS headers
-            response.Headers.Add("Access-Control-Allow-Origin", "*");
-            response.Headers.Add("Access-Control-Allow-Methods", "POST, GET, OPTIONS");
-            response.Headers.Add("Access-Control-Allow-Headers", "Content-Type");
-
+            // ⚠️ CORS 헤더를 의도적으로 보내지 않는다.
+            //    브릿지는 Node http 클라이언트라 CORS 가 필요 없다. 반면 'Access-Control-Allow-Origin: *' +
+            //    OPTIONS 200 응답은 사용자가 열어 둔 아무 웹페이지가 이 서버를 호출할 수 있게 만든다
+            //    (루프백은 브라우저에서도 접근 가능). 헤더를 없애면 프리플라이트가 실패해 브라우저가 차단한다.
+            //    추가 방어로 Origin 헤더가 붙은 요청은 McpAuthToken 에서 거부한다.
             try
             {
                 if (request.HttpMethod == "OPTIONS")
                 {
-                    response.StatusCode = 200;
+                    // 프리플라이트를 허용하지 않는다. 브라우저발 호출을 여기서 끊는다.
+                    SendError(response, 405, "Preflight not supported");
+                    response.Close();
+                    return;
+                }
+
+                // 인증 — 브릿지만 통과한다.
+                if (!McpAuthToken.IsAuthorized(request, out string authReason))
+                {
+                    Debug.LogWarning($"[MCP] Rejected unauthorized request to {request.Url?.AbsolutePath}: {authReason}");
+                    SendError(response, 401, $"Unauthorized: {authReason}");
                     response.Close();
                     return;
                 }
@@ -457,15 +486,37 @@ namespace Community.Unity.MCP
             var request = context.Request;
             var response = context.Response;
 
+            // 본문 크기 상한 — 선언된 Content-Length 부터 거른다. 상한이 없으면 큰 요청 하나로
+            // 에디터 메모리를 압박하거나 5초 읽기 타임아웃을 반복 유발할 수 있다.
+            if (request.ContentLength64 > MaxRequestBodyBytes)
+            {
+                WriteJsonResponse(response, JsonRpcHandler.CreateErrorResponse(null, -32600,
+                    $"Request body too large ({request.ContentLength64} bytes, limit {MaxRequestBodyBytes})"));
+                return;
+            }
+
             string requestBody;
             try
             {
                 // ReadToEnd()가 느리거나 불완전한 요청에서 워커를 무한정 막지 않도록 5초 상한을 둔다.
                 var readTask = Task.Run(() =>
                 {
+                    // Content-Length 를 속이거나 생략(chunked)한 경우를 위해 실제 읽는 양도 제한한다.
                     using (var reader = new StreamReader(request.InputStream, request.ContentEncoding))
                     {
-                        return reader.ReadToEnd();
+                        var buffer = new char[8192];
+                        var sb = new StringBuilder();
+                        int read;
+                        while ((read = reader.Read(buffer, 0, buffer.Length)) > 0)
+                        {
+                            sb.Append(buffer, 0, read);
+                            if (sb.Length > MaxRequestBodyBytes)
+                            {
+                                throw new InvalidDataException(
+                                    $"Request body exceeded {MaxRequestBodyBytes} bytes");
+                            }
+                        }
+                        return sb.ToString();
                     }
                 });
 
