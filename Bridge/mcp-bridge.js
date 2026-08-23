@@ -105,6 +105,35 @@ function sendErrorResponse(id, code, message) {
     }));
 }
 
+// tools/list 는 매 세션 한 번씩 통째로 오가는 고정비다(이 프로젝트 기준 81개 도구 ~40 KB).
+// MCP 스펙이 정한 기본값과 같은 힌트는 실어봐야 의미가 없으므로 뺀다.
+//   readOnlyHint 기본 false / destructiveHint 기본 **true** / idempotentHint 기본 false
+// destructiveHint 는 기본이 true 라는 점이 함정이다 — false 를 생략하면 안전한 도구가
+// 파괴적으로 뒤집히고, true 를 생략하면 읽는 쪽이 기본값을 적용해야 맞는다.
+// 그래서 이 파일의 isIdempotentTool 도 생략된 필드에 기본값을 적용하도록 맞춰 뒀다.
+function slimToolList(tools) {
+    for (const tool of tools) {
+        if (!tool) continue;
+        const a = tool.annotations;
+        if (a) {
+            const slim = {};
+            if (a.readOnlyHint) {
+                slim.readOnlyHint = true;              // 기본 false 와 다르므로 명시
+            } else if (a.destructiveHint === false) {
+                slim.destructiveHint = false;          // 기본 true 와 다르므로 명시
+            }
+            if (a.idempotentHint) slim.idempotentHint = true;
+            if (Object.keys(slim).length > 0) tool.annotations = slim;
+            else delete tool.annotations;
+        }
+        // JsonUtility 는 빈 배열도 그대로 내보낸다. required:[] 는 필드 부재와 같은 뜻이다.
+        const schema = tool.inputSchema;
+        if (schema && Array.isArray(schema.required) && schema.required.length === 0) {
+            delete schema.required;
+        }
+    }
+}
+
 function normalizeForMcpClient(data, expectedId) {
     try {
         const message = JSON.parse(data);
@@ -153,6 +182,8 @@ function normalizeForMcpClient(data, expectedId) {
             for (const local of indexTools.toolDefinitions()) {
                 if (!known.has(local.name)) tools.push(local);
             }
+
+            slimToolList(tools);
         }
 
         return JSON.stringify(message);
@@ -286,8 +317,11 @@ function isIdempotentTool(toolName) {
     if (ann) {
         // 읽기 전용이거나 멱등이면 재전송해도 중복 부작용이 없다.
         // 파괴적이라고 선언된 도구는 멱등 표시가 있어도 재시도하지 않는다.
-        if (ann.destructiveHint) return false;
-        return !!(ann.readOnlyHint || ann.idempotentHint);
+        // 힌트가 생략돼 있으면 MCP 스펙 기본값을 적용한다 — destructiveHint 는 기본이
+        // true 라서, 없다고 비파괴로 읽으면 파괴적 도구를 재전송하게 된다.
+        if (ann.readOnlyHint) return true;
+        if (ann.destructiveHint !== false) return false;
+        return !!ann.idempotentHint;
     }
 
     return IDEMPOTENT_TOOL_PREFIXES.some(prefix => toolName.startsWith(prefix));
