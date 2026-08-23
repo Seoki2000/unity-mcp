@@ -20,7 +20,7 @@ namespace Community.Unity.MCP
 
         [McpTool("unity_get_job_status",
             "Get the status of a deferred job (script recompile or play-mode transition) by jobId. Omit jobId to list the 10 most recent jobs. Status is one of accepted/running/done/failed.",
-            typeof(JobStatusArgs))]
+            typeof(JobStatusArgs), ReadOnly = true)]
         public static object GetJobStatus(string argsJson)
         {
             var args = JsonUtility.FromJson<JobStatusArgs>(argsJson);

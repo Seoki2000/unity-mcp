@@ -11,7 +11,7 @@ namespace Community.Unity.MCP
     [McpToolProvider]
     public class MaterialTools
     {
-        [McpTool("unity_get_material_info", "Get information about a material on a GameObject", typeof(GetMaterialInfoArgs))]
+        [McpTool("unity_get_material_info", "Get information about a material on a GameObject", typeof(GetMaterialInfoArgs), ReadOnly = true)]
         public static object GetMaterialInfo(string argsJson)
         {
             var args = JsonUtility.FromJson<GetMaterialInfoArgs>(argsJson);
@@ -90,7 +90,7 @@ namespace Community.Unity.MCP
             };
         }
 
-        [McpTool("unity_set_material_property", "Set a property on a material", typeof(SetMaterialPropertyArgs))]
+        [McpTool("unity_set_material_property", "Set a property on a material", typeof(SetMaterialPropertyArgs), Idempotent = true)]
         public static object SetMaterialProperty(string argsJson)
         {
             var args = JsonUtility.FromJson<SetMaterialPropertyArgs>(argsJson);
@@ -165,7 +165,7 @@ namespace Community.Unity.MCP
             }
         }
 
-        [McpTool("unity_set_material", "Assign a material to a renderer", typeof(SetMaterialArgs))]
+        [McpTool("unity_set_material", "Assign a material to a renderer", typeof(SetMaterialArgs), Idempotent = true)]
         public static object SetMaterial(string argsJson)
         {
             var args = JsonUtility.FromJson<SetMaterialArgs>(argsJson);

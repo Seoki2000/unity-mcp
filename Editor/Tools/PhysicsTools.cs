@@ -11,7 +11,7 @@ namespace Community.Unity.MCP
     [McpToolProvider]
     public class PhysicsTools
     {
-        [McpTool("unity_raycast", "Cast a ray and return hit information", typeof(RaycastArgs))]
+        [McpTool("unity_raycast", "Cast a ray and return hit information", typeof(RaycastArgs), ReadOnly = true)]
         public static object Raycast(string argsJson)
         {
             var args = JsonUtility.FromJson<RaycastArgs>(argsJson);
@@ -64,7 +64,7 @@ namespace Community.Unity.MCP
             };
         }
 
-        [McpTool("unity_overlap_sphere", "Find all colliders within a sphere", typeof(OverlapSphereArgs))]
+        [McpTool("unity_overlap_sphere", "Find all colliders within a sphere", typeof(OverlapSphereArgs), ReadOnly = true)]
         public static object OverlapSphere(string argsJson)
         {
             var args = JsonUtility.FromJson<OverlapSphereArgs>(argsJson);

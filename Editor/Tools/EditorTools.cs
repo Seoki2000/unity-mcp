@@ -39,7 +39,8 @@ namespace Community.Unity.MCP
             "Discard",
         };
 
-        [McpTool("unity_execute_menu", "Execute a Unity menu item. Destructive menu paths are blocked; the tool can be disabled entirely in Window > MCP Server.", typeof(ExecuteMenuArgs))]
+        // 임의 메뉴를 실행하므로 무엇을 할지 정적으로 알 수 없다 → 가장 보수적으로 표시한다.
+        [McpTool("unity_execute_menu", "Execute a Unity menu item. Irreversible menu paths are blocked; the tool can be disabled entirely in Window > MCP Server.", typeof(ExecuteMenuArgs), Destructive = true)]
         public static object ExecuteMenu(string argsJson)
         {
             var args = JsonUtility.FromJson<ExecuteMenuArgs>(argsJson);
@@ -77,7 +78,7 @@ namespace Community.Unity.MCP
             };
         }
 
-        [McpTool("unity_select_object", "Select a GameObject in the Editor", typeof(SelectObjectArgs))]
+        [McpTool("unity_select_object", "Select a GameObject in the Editor", typeof(SelectObjectArgs), Idempotent = true)]
         public static object SelectObject(string argsJson)
         {
             var args = JsonUtility.FromJson<SelectObjectArgs>(argsJson);
@@ -103,7 +104,7 @@ namespace Community.Unity.MCP
             };
         }
 
-        [McpTool("unity_get_selection", "Get the currently selected objects in the Editor")]
+        [McpTool("unity_get_selection", "Get the currently selected objects in the Editor", ReadOnly = true)]
         public static object GetSelection(string argsJson)
         {
             var selection = Selection.gameObjects;
@@ -121,7 +122,7 @@ namespace Community.Unity.MCP
             };
         }
 
-        [McpTool("unity_get_editor_state", "Get the current state of the Unity Editor")]
+        [McpTool("unity_get_editor_state", "Get the current state of the Unity Editor", ReadOnly = true)]
         public static object GetEditorState(string argsJson)
         {
             return new EditorStateResult
@@ -137,7 +138,7 @@ namespace Community.Unity.MCP
 
         private const string DomainReloadNote = "Domain reload will briefly disconnect the bridge; poll unity_get_editor_state to confirm.";
 
-        [McpTool("unity_enter_play_mode", "Enter play mode")]
+        [McpTool("unity_enter_play_mode", "Enter play mode", Idempotent = true)]
         public static object EnterPlayMode(string argsJson)
         {
             if (EditorApplication.isPlaying)
@@ -182,7 +183,7 @@ namespace Community.Unity.MCP
             };
         }
 
-        [McpTool("unity_exit_play_mode", "Exit play mode")]
+        [McpTool("unity_exit_play_mode", "Exit play mode", Idempotent = true)]
         public static object ExitPlayMode(string argsJson)
         {
             if (!EditorApplication.isPlaying)

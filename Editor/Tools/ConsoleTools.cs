@@ -44,7 +44,7 @@ namespace Community.Unity.MCP
             }
         }
 
-        [McpTool("unity_get_console_logs", "Get recent Unity console logs", typeof(GetLogsArgs))]
+        [McpTool("unity_get_console_logs", "Get recent Unity console logs", typeof(GetLogsArgs), ReadOnly = true)]
         public static object GetConsoleLogs(string argsJson)
         {
             var args = JsonUtility.FromJson<GetLogsArgs>(argsJson);
@@ -80,7 +80,7 @@ namespace Community.Unity.MCP
             };
         }
 
-        [McpTool("unity_clear_console", "Clear the Unity console")]
+        [McpTool("unity_clear_console", "Clear the Unity console", Destructive = true)]
         public static object ClearConsole(string argsJson)
         {
             // Use reflection to access the internal Console clear method

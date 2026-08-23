@@ -10,7 +10,7 @@ namespace Community.Unity.MCP
     [McpToolProvider]
     public class BehaviorTools
     {
-        [McpTool("unity_get_bt_graph", "Get details of a Behavior Graph (nodes, edges, blackboard)", typeof(GetGraphArgs))]
+        [McpTool("unity_get_bt_graph", "Get details of a Behavior Graph (nodes, edges, blackboard)", typeof(GetGraphArgs), ReadOnly = true)]
         public static object GetBehaviorGraph(string argsJson)
         {
             var args = JsonUtility.FromJson<GetGraphArgs>(argsJson);
@@ -79,7 +79,7 @@ namespace Community.Unity.MCP
             }
         }
 
-        [McpTool("unity_remove_bt_node", "Remove a node from a Behavior Graph", typeof(RemoveNodeArgs))]
+        [McpTool("unity_remove_bt_node", "Remove a node from a Behavior Graph", typeof(RemoveNodeArgs), Destructive = true)]
         public static object RemoveBtNode(string argsJson)
         {
             var args = JsonUtility.FromJson<RemoveNodeArgs>(argsJson);
@@ -222,7 +222,7 @@ namespace Community.Unity.MCP
             }
         }
 
-        [McpTool("unity_set_bt_node_property", "Set a property value on a Behavior Graph node", typeof(SetNodePropertyArgs))]
+        [McpTool("unity_set_bt_node_property", "Set a property value on a Behavior Graph node", typeof(SetNodePropertyArgs), Idempotent = true)]
         public static object SetBtNodeProperty(string argsJson)
         {
             var args = JsonUtility.FromJson<SetNodePropertyArgs>(argsJson);

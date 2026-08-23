@@ -21,7 +21,7 @@ namespace Community.Unity.MCP
             public string assetPath;
         }
 
-        [McpTool("unity_open_animator_window", "Open the Animator window in Unity Editor", typeof(OpenWindowArgs))]
+        [McpTool("unity_open_animator_window", "Open the Animator window in Unity Editor", typeof(OpenWindowArgs), Idempotent = true)]
         public static object OpenAnimatorWindow(string argsJson)
         {
             var args = string.IsNullOrEmpty(argsJson) ? null : JsonUtility.FromJson<OpenWindowArgs>(argsJson);
@@ -44,7 +44,7 @@ namespace Community.Unity.MCP
             }
         }
 
-        [McpTool("unity_open_bt_window", "Open the Unity Behavior (BT) window", typeof(OpenWindowArgs))]
+        [McpTool("unity_open_bt_window", "Open the Unity Behavior (BT) window", typeof(OpenWindowArgs), Idempotent = true)]
         public static object OpenBehaviorWindow(string argsJson)
         {
             var args = string.IsNullOrEmpty(argsJson) ? null : JsonUtility.FromJson<OpenWindowArgs>(argsJson);

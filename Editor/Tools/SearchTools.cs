@@ -13,7 +13,7 @@ namespace Community.Unity.MCP
     [McpToolProvider]
     public class SearchTools
     {
-        [McpTool("unity_search_project", "Search for assets, scripts, or content in the project", typeof(SearchProjectArgs))]
+        [McpTool("unity_search_project", "Search for assets, scripts, or content in the project", typeof(SearchProjectArgs), ReadOnly = true)]
         public static object SearchProject(string argsJson)
         {
             var args = JsonUtility.FromJson<SearchProjectArgs>(argsJson);
@@ -29,6 +29,7 @@ namespace Community.Unity.MCP
             
             // Determine search type
             string searchType = string.IsNullOrEmpty(args.type) ? "name" : args.type.ToLower();
+            string ambiguityNote = null;
             
             switch (searchType)
             {
@@ -36,10 +37,20 @@ namespace Community.Unity.MCP
                     SearchByName(args.query, searchPath, args.assetType, results, maxResults);
                     break;
                 case "content":
-                    SearchByContent(args.query, searchPath, results, maxResults, args.caseSensitive);
+                    try
+                    {
+                        SearchByContent(args.query, searchPath, results, maxResults,
+                                        args.caseSensitive, args.regex,
+                                        args.maxMatchesPerFile > 0 ? Math.Min(args.maxMatchesPerFile, 20) : 3);
+                    }
+                    catch (ArgumentException ex)
+                    {
+                        // 잘못된 정규식 — 0건으로 뭉개면 AI 가 "없다"고 결론낸다.
+                        return new McpToolError { error = $"Invalid regex pattern: {ex.Message}" };
+                    }
                     break;
                 case "reference":
-                    SearchByReference(args.query, results, maxResults);
+                    ambiguityNote = SearchByReference(args.query, results, maxResults);
                     break;
                 default:
                     return new McpToolError { error = $"Unknown search type: {searchType}. Valid types: name, content, reference" };
@@ -51,6 +62,8 @@ namespace Community.Unity.MCP
                 searchType = searchType,
                 folder = searchPath,
                 resultCount = results.Count,
+                truncated = results.Count >= maxResults,
+                note = ambiguityNote,
                 results = results.ToArray()
             };
         }
@@ -84,7 +97,8 @@ namespace Community.Unity.MCP
             }
         }
 
-        private static void SearchByContent(string query, string folder, List<SearchResult> results, int maxResults, bool caseSensitive)
+        private static void SearchByContent(string query, string folder, List<SearchResult> results,
+                                            int maxResults, bool caseSensitive, bool useRegex, int maxMatchesPerFile)
         {
             // 경로 포함 검사 — folder 는 호출자 입력이고 아래에서 SearchOption.AllDirectories 로 재귀 순회한다.
             // 검사가 없으면 folder="../.." 로 프로젝트 밖 디스크를 훑어 파일 내용을 반환할 수 있다.
@@ -99,48 +113,58 @@ namespace Community.Unity.MCP
             {
                 return;
             }
-            
-            // Search in text-based files
+
+            Regex regex = null;
+            if (useRegex)
+            {
+                var opts = RegexOptions.CultureInvariant;
+                if (!caseSensitive) opts |= RegexOptions.IgnoreCase;
+                // 잘못된 패턴은 호출자에게 알린다(조용히 0건으로 끝내면 AI 가 "없다"고 결론낸다).
+                regex = new Regex(query, opts);
+            }
+
+            // ⚠️ 기존 버그: 확장자 배열을 순차로 돌면서 results.Count >= maxResults 에 걸리면 break 했다.
+            //    .cs 가 첫 번째라 스크립트가 많은 프로젝트에서는 shader/hlsl/asmdef 매치가
+            //    사실상 절대 반환되지 않았다. 전체 후보를 모은 뒤 랭킹으로 정렬하고 그 다음에 자른다.
             string[] extensions = { "*.cs", "*.shader", "*.cginc", "*.hlsl", "*.json", "*.txt", "*.xml", "*.asmdef" };
-            
+
+            var candidates = new List<ScoredResult>();
+
             foreach (var ext in extensions)
             {
-                if (results.Count >= maxResults) break;
-                
-                var files = Directory.GetFiles(fullFolderPath, ext, SearchOption.AllDirectories);
-                
+                string[] files;
+                try { files = Directory.GetFiles(fullFolderPath, ext, SearchOption.AllDirectories); }
+                catch { continue; }
+
                 foreach (var file in files)
                 {
-                    if (results.Count >= maxResults) break;
-                    
                     try
                     {
                         string content = File.ReadAllText(file);
-                        
-                        bool matches = caseSensitive 
-                            ? content.Contains(query) 
-                            : content.IndexOf(query, StringComparison.OrdinalIgnoreCase) >= 0;
-                        
-                        if (matches)
+
+                        var matchingLines = FindMatchingLines(content, query, caseSensitive, regex, maxMatchesPerFile,
+                                                              out int firstLine, out int matchCount);
+                        if (matchCount == 0) continue;
+
+                        string relativePath = file.Replace(projectPath + Path.DirectorySeparatorChar, "").Replace('\\', '/');
+                        string fileName = Path.GetFileName(file);
+
+                        candidates.Add(new ScoredResult
                         {
-                            // Convert to Unity path
-                            string relativePath = file.Replace(projectPath + Path.DirectorySeparatorChar, "").Replace('\\', '/');
-                            string guid = AssetDatabase.AssetPathToGUID(relativePath);
-                            
-                            // Find matching lines
-                            var matchingLines = FindMatchingLines(content, query, caseSensitive, 3);
-                            
-                            results.Add(new SearchResult
+                            score = ScoreContentMatch(query, fileName, relativePath, matchCount),
+                            result = new SearchResult
                             {
                                 path = relativePath,
-                                name = Path.GetFileName(file),
+                                name = fileName,
                                 type = Path.GetExtension(file).TrimStart('.').ToUpper(),
-                                guid = guid,
+                                guid = AssetDatabase.AssetPathToGUID(relativePath),
                                 matchType = "content",
                                 matchContext = matchingLines.Count > 0 ? matchingLines[0] : null,
-                                lineNumber = matchingLines.Count > 0 ? GetLineNumber(content, query, caseSensitive) : 0
-                            });
-                        }
+                                matchLines = matchingLines.ToArray(),
+                                matchCount = matchCount,
+                                lineNumber = firstLine
+                            }
+                        });
                     }
                     catch
                     {
@@ -148,19 +172,99 @@ namespace Community.Unity.MCP
                     }
                 }
             }
+
+            // 결정적 랭킹: 점수 내림차순 → 경로 오름차순(동점 시 순서가 호출마다 흔들리지 않게).
+            candidates.Sort((a, b) =>
+            {
+                int c = b.score.CompareTo(a.score);
+                return c != 0 ? c : string.Compare(a.result.path, b.result.path, StringComparison.OrdinalIgnoreCase);
+            });
+
+            for (int i = 0; i < candidates.Count && results.Count < maxResults; i++)
+            {
+                results.Add(candidates[i].result);
+            }
         }
 
-        private static void SearchByReference(string query, List<SearchResult> results, int maxResults)
+        private struct ScoredResult
         {
-            // Find the asset being referenced
-            string[] guids = AssetDatabase.FindAssets(query);
-            if (guids.Length == 0)
+            public int score;
+            public SearchResult result;
+        }
+
+        /// <summary>
+        /// 내용 검색 랭킹. 문서화된 결정적 규칙만 쓴다(설명 없는 휴리스틱 금지).
+        ///   +100 파일명이 질의와 완전히 일치 (확장자 제외)
+        ///   +50  파일명이 질의를 포함
+        ///   +20  Assets/ 직속 스크립트 폴더처럼 경로가 짧을수록 (깊이 페널티의 역)
+        ///   +매치 수 (최대 +25)
+        /// </summary>
+        private static int ScoreContentMatch(string query, string fileName, string relativePath, int matchCount)
+        {
+            int score = 0;
+            string stem = Path.GetFileNameWithoutExtension(fileName);
+
+            if (string.Equals(stem, query, StringComparison.OrdinalIgnoreCase)) score += 100;
+            else if (fileName.IndexOf(query, StringComparison.OrdinalIgnoreCase) >= 0) score += 50;
+
+            int depth = 0;
+            for (int i = 0; i < relativePath.Length; i++) if (relativePath[i] == '/') depth++;
+            score += Math.Max(0, 20 - depth * 2);
+
+            score += Math.Min(matchCount, 25);
+            return score;
+        }
+
+        /// <summary>
+        /// 역참조 검색. 반환값은 모호성 경고(있으면) 문자열.
+        ///
+        /// ⚠️ 기존 버그: FindAssets(query) 의 guids[0] 만 대상으로 삼았다.
+        ///    동명 에셋이 둘 이상이면 어느 것을 봤는지 알리지도 않고 엉뚱한 답을 냈다.
+        ///    이제 정확한 경로/GUID 를 우선 해석하고, 여전히 모호하면 후보를 돌려줘 호출자가 고르게 한다.
+        /// </summary>
+        private static string SearchByReference(string query, List<SearchResult> results, int maxResults)
+        {
+            string targetPath = null;
+
+            // 1) 질의가 에셋 경로면 그대로 쓴다.
+            if (query.IndexOf('/') >= 0 && !string.IsNullOrEmpty(AssetDatabase.AssetPathToGUID(query)))
             {
-                return;
+                targetPath = query;
             }
-            
-            string targetGuid = guids[0];
-            string targetPath = AssetDatabase.GUIDToAssetPath(targetGuid);
+            // 2) 질의가 32자 hex GUID 면 경로로 변환한다.
+            else if (query.Length == 32 && IsHex(query))
+            {
+                string p = AssetDatabase.GUIDToAssetPath(query);
+                if (!string.IsNullOrEmpty(p)) targetPath = p;
+            }
+
+            if (targetPath == null)
+            {
+                string[] guids = AssetDatabase.FindAssets(query);
+                if (guids.Length == 0) return null;
+
+                var paths = new List<string>();
+                foreach (var g in guids)
+                {
+                    var p = AssetDatabase.GUIDToAssetPath(g);
+                    if (!string.IsNullOrEmpty(p)) paths.Add(p);
+                }
+
+                if (paths.Count == 0) return null;
+
+                if (paths.Count > 1)
+                {
+                    // 조용히 하나를 고르지 않는다. 무엇을 봤는지, 무엇이 후보였는지 알린다.
+                    paths.Sort(StringComparer.OrdinalIgnoreCase);
+                    targetPath = paths[0];
+                    int shown = Math.Min(paths.Count, 10);
+                    return $"'{query}' matched {paths.Count} assets; searched references to '{targetPath}' only. " +
+                           $"Pass an exact asset path or GUID to disambiguate. Candidates: {string.Join(", ", paths.GetRange(0, shown))}" +
+                           (paths.Count > shown ? ", ..." : "");
+                }
+
+                targetPath = paths[0];
+            }
             
             // Search for references to this asset
             string[] allAssets = AssetDatabase.GetAllAssetPaths();
@@ -195,45 +299,49 @@ namespace Community.Unity.MCP
                     }
                 }
             }
+
+            return null;   // 모호성 없음
         }
 
-        private static List<string> FindMatchingLines(string content, string query, bool caseSensitive, int maxLines)
+        /// <summary>
+        /// 매칭 라인을 모으고, 첫 매치 줄번호와 총 매치 라인 수를 함께 돌려준다.
+        /// 기존 구현은 라인 목록을 만든 뒤 GetLineNumber 로 내용을 한 번 더 전수 스캔했고,
+        /// 반환은 matchingLines[0] 하나뿐이라 파일당 매치가 여러 개여도 AI 가 볼 수 없었다.
+        /// </summary>
+        private static List<string> FindMatchingLines(string content, string query, bool caseSensitive,
+                                                      Regex regex, int maxLines,
+                                                      out int firstLineNumber, out int matchCount)
         {
             var lines = new List<string>();
-            var allLines = content.Split('\n');
-            
-            for (int i = 0; i < allLines.Length && lines.Count < maxLines; i++)
-            {
-                bool matches = caseSensitive 
-                    ? allLines[i].Contains(query) 
-                    : allLines[i].IndexOf(query, StringComparison.OrdinalIgnoreCase) >= 0;
-                
-                if (matches)
-                {
-                    lines.Add($"L{i + 1}: {allLines[i].Trim()}");
-                }
-            }
-            
-            return lines;
-        }
+            firstLineNumber = 0;
+            matchCount = 0;
 
-        private static int GetLineNumber(string content, string query, bool caseSensitive)
-        {
-            var lines = content.Split('\n');
-            
-            for (int i = 0; i < lines.Length; i++)
+            var allLines = content.Split('\n');
+
+            for (int i = 0; i < allLines.Length; i++)
             {
-                bool matches = caseSensitive 
-                    ? lines[i].Contains(query) 
-                    : lines[i].IndexOf(query, StringComparison.OrdinalIgnoreCase) >= 0;
-                
-                if (matches)
+                string line = allLines[i];
+                bool matches = regex != null
+                    ? regex.IsMatch(line)
+                    : (caseSensitive
+                        ? line.Contains(query)
+                        : line.IndexOf(query, StringComparison.OrdinalIgnoreCase) >= 0);
+
+                if (!matches) continue;
+
+                matchCount++;
+                if (firstLineNumber == 0) firstLineNumber = i + 1;
+
+                if (lines.Count < maxLines)
                 {
-                    return i + 1;
+                    string trimmed = line.Trim();
+                    // 한 줄이 지나치게 길면(미니파이된 json 등) 컨텍스트를 잘라 응답을 보호한다.
+                    if (trimmed.Length > 300) trimmed = trimmed.Substring(0, 300) + "…";
+                    lines.Add($"L{i + 1}: {trimmed}");
                 }
             }
-            
-            return 0;
+
+            return lines;
         }
 
         #region Data Types
@@ -246,6 +354,8 @@ namespace Community.Unity.MCP
             [McpParam("Folder to search (default 'Assets')")] public string folder;
             [McpParam("Filter by asset type (e.g., 'Script', 'Prefab', 'Scene')")] public string assetType;
             [McpParam("Case sensitive search (for content search)")] public bool caseSensitive;
+            [McpParam("Treat query as a .NET regular expression (content search only)")] public bool regex;
+            [McpParam("Max matching lines returned per file (default 3, max 20)")] public int maxMatchesPerFile;
             [McpParam("Maximum results (default 50)")] public int maxResults;
         }
 
@@ -258,6 +368,8 @@ namespace Community.Unity.MCP
             public string guid;
             public string matchType;
             public string matchContext;
+            public string[] matchLines;   // 파일당 여러 매치 (기존은 첫 줄만 노출)
+            public int matchCount;       // 이 파일의 총 매치 라인 수
             public int lineNumber;
         }
 
@@ -268,7 +380,19 @@ namespace Community.Unity.MCP
             public string searchType;
             public string folder;
             public int resultCount;
+            public bool truncated;
+            public string note;          // 모호한 reference 질의 등에 대한 경고
             public SearchResult[] results;
+        }
+
+        private static bool IsHex(string v)
+        {
+            foreach (char c in v)
+            {
+                bool hex = (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F');
+                if (!hex) return false;
+            }
+            return true;
         }
 
         #endregion

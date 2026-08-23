@@ -52,7 +52,7 @@ namespace Community.Unity.MCP
             };
         }
 
-        [McpTool("unity_create_material", "Create a new material asset", typeof(CreateMaterialArgs))]
+        [McpTool("unity_create_material", "Create a new material asset", typeof(CreateMaterialArgs), Destructive = true)]
         public static object CreateMaterial(string argsJson)
         {
             var args = JsonUtility.FromJson<CreateMaterialArgs>(argsJson);
@@ -101,7 +101,7 @@ namespace Community.Unity.MCP
             };
         }
 
-        [McpTool("unity_create_script", "Create a new C# script", typeof(CreateScriptArgs))]
+        [McpTool("unity_create_script", "Create a new C# script", typeof(CreateScriptArgs), Destructive = true)]
         public static object CreateScript(string argsJson)
         {
             var args = JsonUtility.FromJson<CreateScriptArgs>(argsJson);
@@ -150,7 +150,7 @@ namespace Community.Unity.MCP
             };
         }
 
-        [McpTool("unity_move_asset", "Move or rename an asset", typeof(MoveAssetArgs))]
+        [McpTool("unity_move_asset", "Move or rename an asset", typeof(MoveAssetArgs), Destructive = true)]
         public static object MoveAsset(string argsJson)
         {
             var args = JsonUtility.FromJson<MoveAssetArgs>(argsJson);

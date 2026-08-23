@@ -94,10 +94,34 @@ namespace Community.Unity.MCP
         /// <summary>
         /// Handle resources/read request.
         /// </summary>
+        /// <summary>
+        /// JsonRpcHandler 가 이미 파싱해 둔 params 를 그대로 받는다.
+        /// 예전 경로는 JToken 을 문자열로 되직렬화한 뒤 정규식으로 uri 를 다시 뽑았다 —
+        /// 파싱을 두 번 하면서 이스케이프된 인용부호에서 깨지고, JSON 어디에 있든
+        /// 첫 번째 "uri" 를 집어 엉뚱한 값을 읽을 수 있었다.
+        /// </summary>
+        public static object HandleResourcesRead(Newtonsoft.Json.Linq.JToken paramsToken)
+        {
+            string uri = (paramsToken as Newtonsoft.Json.Linq.JObject)?["uri"]?.ToString();
+            return ReadByUri(uri);
+        }
+
+        /// <summary>
+        /// 문자열 params 를 받는 구 경로. Newtonsoft 로 정직하게 파싱한다(정규식 제거).
+        /// </summary>
         public static object HandleResourcesRead(string paramsJson)
         {
-            string uri = ExtractUri(paramsJson);
-            
+            string uri = null;
+            if (!string.IsNullOrEmpty(paramsJson))
+            {
+                try { uri = Newtonsoft.Json.Linq.JObject.Parse(paramsJson)["uri"]?.ToString(); }
+                catch (Exception) { uri = null; }
+            }
+            return ReadByUri(uri);
+        }
+
+        private static object ReadByUri(string uri)
+        {
             if (string.IsNullOrEmpty(uri))
             {
                 throw new ArgumentException("uri parameter is required");
@@ -305,14 +329,6 @@ namespace Community.Unity.MCP
                 case ".asmdef": return "application/json";
                 default: return "text/plain";
             }
-        }
-
-        private static string ExtractUri(string json)
-        {
-            if (string.IsNullOrEmpty(json)) return null;
-            
-            var match = System.Text.RegularExpressions.Regex.Match(json, "\"uri\"\\s*:\\s*\"([^\"]*)\"");
-            return match.Success ? match.Groups[1].Value : null;
         }
 
         #region Data Types

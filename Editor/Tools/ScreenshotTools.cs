@@ -15,7 +15,7 @@ namespace Community.Unity.MCP
         private const int MaxScreenshotDimension = 1280; // 긴 변 기준
         private const int MaxBase64Length = 2 * 1024 * 1024; // 2MB
 
-        [McpTool("unity_take_screenshot", "Capture a screenshot of the Game View or Scene View", typeof(TakeScreenshotArgs))]
+        [McpTool("unity_take_screenshot", "Capture a screenshot of the Game View or Scene View", typeof(TakeScreenshotArgs), ReadOnly = true)]
         public static object TakeScreenshot(string argsJson)
         {
             var args = JsonUtility.FromJson<TakeScreenshotArgs>(argsJson);

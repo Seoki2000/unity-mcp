@@ -84,7 +84,7 @@ namespace Community.Unity.MCP
             }
         }
 
-        [McpTool("unity_get_compilation_status", "Get the current compilation status and any errors")]
+        [McpTool("unity_get_compilation_status", "Get the current compilation status and any errors", ReadOnly = true)]
         public static object GetCompilationStatus(string argsJson)
         {
             Initialize();
@@ -108,7 +108,7 @@ namespace Community.Unity.MCP
             };
         }
 
-        [McpTool("unity_recompile_scripts", "Force recompilation of all scripts. Returns immediately with a jobId; poll unity_get_job_status to await completion across the domain reload.")]
+        [McpTool("unity_recompile_scripts", "Force recompilation of all scripts. Returns immediately with a jobId; poll unity_get_job_status to await completion across the domain reload.", Idempotent = true)]
         public static object RecompileScripts(string argsJson)
         {
             if (EditorApplication.isCompiling)
@@ -185,7 +185,7 @@ namespace Community.Unity.MCP
             }
         }
 
-        [McpTool("unity_get_assemblies", "Get information about project assemblies")]
+        [McpTool("unity_get_assemblies", "Get information about project assemblies", ReadOnly = true)]
         public static object GetAssemblies(string argsJson)
         {
             var assemblies = CompilationPipeline.GetAssemblies(AssembliesType.Player);

@@ -23,32 +23,47 @@ namespace Community.Unity.MCP
         private const int MAX_ROOT_OBJECTS = 50;
         private const int MAX_TOTAL_NODES = 300;
 
-        [McpTool("unity_get_hierarchy", "Get the hierarchy of GameObjects in the current scene")]
+        [McpTool("unity_get_hierarchy", "Get the hierarchy of GameObjects in the current scene. Paginated by root index: pass rootOffset from the previous response's nextRootOffset to continue.", typeof(GetHierarchyArgs), ReadOnly = true)]
         public static object GetHierarchy(string argsJson)
         {
+            var args = JsonUtility.FromJson<GetHierarchyArgs>(argsJson);
+
             var scene = SceneManager.GetActiveScene();
             var rootObjects = scene.GetRootGameObjects();
             var hierarchy = new List<GameObjectInfo>();
 
-            int nodeBudget = MAX_TOTAL_NODES;
-            int rootLimit = Mathf.Min(rootObjects.Length, MAX_ROOT_OBJECTS);
-            for (int i = 0; i < rootLimit && nodeBudget > 0; i++)
+            // 기존에는 이 세 값이 전부 하드코딩이었다. 상한 자체는 옳지만, 잘린 뒤를
+            // 가져올 방법이 없어 AI 가 씬의 나머지를 영원히 못 봤다. 이제 조절 + 이어받기 가능.
+            int maxDepth   = args != null && args.maxDepth   > 0 ? Mathf.Min(args.maxDepth, 8)     : DEFAULT_MAX_DEPTH;
+            int rootLimit  = McpPaging.ClampLimit(args?.maxRootObjects ?? 0, MAX_ROOT_OBJECTS, 500);
+            int nodeBudget = McpPaging.ClampLimit(args?.maxNodes ?? 0, MAX_TOTAL_NODES, 5000);
+            int rootOffset = McpPaging.ClampOffset(args?.rootOffset ?? 0);
+
+            int produced = 0;
+            int i = rootOffset;
+            for (; i < rootObjects.Length && produced < rootLimit && nodeBudget > 0; i++)
             {
-                hierarchy.Add(BuildHierarchy(rootObjects[i], 0, DEFAULT_MAX_DEPTH, ref nodeBudget));
+                hierarchy.Add(BuildHierarchy(rootObjects[i], 0, maxDepth, ref nodeBudget));
+                produced++;
             }
+
+            // i 는 실제로 소비한 다음 루트 인덱스다(노드 예산 소진으로 조기 종료했을 수도 있다).
+            int nextRootOffset = i < rootObjects.Length ? i : -1;
 
             return new HierarchyResult
             {
                 sceneName = scene.name,
                 rootObjectCount = rootObjects.Length,
                 returnedRootCount = hierarchy.Count,
-                // 루트가 잘렸거나 노드 예산이 소진되면 truncated 표시
-                truncated = rootObjects.Length > hierarchy.Count || nodeBudget <= 0,
+                rootOffset = rootOffset,
+                nextRootOffset = nextRootOffset,
+                nodeBudgetExhausted = nodeBudget <= 0,
+                truncated = nextRootOffset >= 0,
                 rootObjects = hierarchy.ToArray()
             };
         }
 
-        [McpTool("unity_get_gameobject", "Get details of a specific GameObject by path", typeof(GetGameObjectArgs))]
+        [McpTool("unity_get_gameobject", "Get details of a specific GameObject by path", typeof(GetGameObjectArgs), ReadOnly = true)]
         public static object GetGameObject(string argsJson)
         {
             var args = JsonUtility.FromJson<GetGameObjectArgs>(argsJson);
@@ -67,7 +82,7 @@ namespace Community.Unity.MCP
             return BuildDetailedGameObjectInfo(go);
         }
 
-        [McpTool("unity_get_components", "Get all components on a GameObject", typeof(GetGameObjectArgs))]
+        [McpTool("unity_get_components", "Get all components on a GameObject", typeof(GetGameObjectArgs), ReadOnly = true)]
         public static object GetComponents(string argsJson)
         {
             var args = JsonUtility.FromJson<GetGameObjectArgs>(argsJson);
@@ -104,7 +119,7 @@ namespace Community.Unity.MCP
             };
         }
 
-        [McpTool("unity_find_objects_by_component", "Find all GameObjects in the active scene that have a specific component", typeof(FindObjectsArgs))]
+        [McpTool("unity_find_objects_by_component", "Find all GameObjects in the active scene that have a specific component", typeof(FindObjectsArgs), ReadOnly = true)]
         public static object FindObjectsByComponent(string argsJson)
         {
             var args = JsonUtility.FromJson<FindObjectsArgs>(argsJson);
@@ -132,7 +147,7 @@ namespace Community.Unity.MCP
             return new FindObjectsResult { componentName = args.componentName, count = results.Count, paths = results.ToArray() };
         }
 
-        [McpTool("unity_set_object_parent", "Set the parent of a GameObject", typeof(SetParentArgs))]
+        [McpTool("unity_set_object_parent", "Set the parent of a GameObject", typeof(SetParentArgs), Idempotent = true)]
         public static object SetObjectParent(string argsJson)
         {
             var args = JsonUtility.FromJson<SetParentArgs>(argsJson);
@@ -265,8 +280,20 @@ namespace Community.Unity.MCP
             public string sceneName;
             public int rootObjectCount;
             public int returnedRootCount;
+            public int rootOffset;
+            public int nextRootOffset;      // 더 없으면 -1
+            public bool nodeBudgetExhausted; // 노드 예산 소진으로 조기 종료했나
             public bool truncated;
             public GameObjectInfo[] rootObjects;
+        }
+
+        [Serializable]
+        public class GetHierarchyArgs
+        {
+            [McpParam("Max depth per root (default 2, max 8)")] public int maxDepth;
+            [McpParam("Max root objects per page (default 50, max 500)")] public int maxRootObjects;
+            [McpParam("Total node budget (default 300, max 5000)")] public int maxNodes;
+            [McpParam("Start root index. Pass the previous response's nextRootOffset to continue")] public int rootOffset;
         }
 
         [Serializable]

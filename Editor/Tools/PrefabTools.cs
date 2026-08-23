@@ -78,7 +78,7 @@ namespace Community.Unity.MCP
             };
         }
 
-        [McpTool("unity_get_prefab_info", "Get detailed information about a prefab", typeof(GetPrefabInfoArgs))]
+        [McpTool("unity_get_prefab_info", "Get detailed information about a prefab", typeof(GetPrefabInfoArgs), ReadOnly = true)]
         public static object GetPrefabInfo(string argsJson)
         {
             var args = JsonUtility.FromJson<GetPrefabInfoArgs>(argsJson);
@@ -101,7 +101,7 @@ namespace Community.Unity.MCP
             return info;
         }
 
-        [McpTool("unity_create_prefab", "Create a prefab from a GameObject in the scene", typeof(CreatePrefabArgs))]
+        [McpTool("unity_create_prefab", "Create a prefab from a GameObject in the scene", typeof(CreatePrefabArgs), Destructive = true)]
         public static object CreatePrefab(string argsJson)
         {
             var args = JsonUtility.FromJson<CreatePrefabArgs>(argsJson);
@@ -156,7 +156,7 @@ namespace Community.Unity.MCP
             };
         }
 
-        [McpTool("unity_unpack_prefab", "Unpack a prefab instance in the scene", typeof(UnpackPrefabArgs))]
+        [McpTool("unity_unpack_prefab", "Unpack a prefab instance in the scene", typeof(UnpackPrefabArgs), Destructive = true)]
         public static object UnpackPrefab(string argsJson)
         {
             var args = JsonUtility.FromJson<UnpackPrefabArgs>(argsJson);

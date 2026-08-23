@@ -14,7 +14,7 @@ namespace Community.Unity.MCP
     [McpToolProvider]
     public class ContextTools
     {
-        [McpTool("unity_get_scene_summary", "Get a compact summary of the current scene for AI context")]
+        [McpTool("unity_get_scene_summary", "Get a compact summary of the current scene for AI context", ReadOnly = true)]
         public static object GetSceneSummary(string argsJson)
         {
             var scene = SceneManager.GetActiveScene();
@@ -49,7 +49,7 @@ namespace Community.Unity.MCP
             };
         }
 
-        [McpTool("unity_get_component_schema", "Get all serializable properties of a component type", typeof(GetComponentSchemaArgs))]
+        [McpTool("unity_get_component_schema", "Get all serializable properties of a component type", typeof(GetComponentSchemaArgs), ReadOnly = true)]
         public static object GetComponentSchema(string argsJson)
         {
             var args = JsonUtility.FromJson<GetComponentSchemaArgs>(argsJson);
@@ -111,7 +111,7 @@ namespace Community.Unity.MCP
             };
         }
 
-        [McpTool("unity_get_type_info", "Get available Unity component types or search for types", typeof(GetTypeInfoArgs))]
+        [McpTool("unity_get_type_info", "Get available Unity component types or search for types", typeof(GetTypeInfoArgs), ReadOnly = true)]
         public static object GetTypeInfo(string argsJson)
         {
             var args = JsonUtility.FromJson<GetTypeInfoArgs>(argsJson);

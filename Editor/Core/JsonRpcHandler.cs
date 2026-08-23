@@ -51,10 +51,11 @@ namespace Community.Unity.MCP
                         result = ResourceHandler.HandleResourcesList(paramsToken?.ToString(Formatting.None));
                         break;
                     case "resources/read":
-                        result = ResourceHandler.HandleResourcesRead(paramsToken?.ToString(Formatting.None));
+                        // JToken 을 그대로 넘긴다 — 문자열로 되직렬화 후 정규식 재파싱하던 경로 제거.
+                        result = ResourceHandler.HandleResourcesRead(paramsToken);
                         break;
                     case "ping":
-                        result = new { pong = true };
+                        result = new McpPingResult { pong = true };
                         break;
                     default:
                         // 알 수 없는 메서드(notifications/* 포함) — 기존과 동일하게 -32601 에러 응답.
@@ -144,6 +145,10 @@ namespace Community.Unity.MCP
 
             var result = ToolRegistry.ExecuteTool(toolName, argumentsJson);
 
+            // 도구가 McpToolError 를 반환하면 isError 를 세운다.
+            // 이전에는 항상 false 라, AI 가 응답 본문의 "error" 키를 눈으로 찾아야만 실패를 알 수 있었다.
+            bool isError = result is McpToolError;
+
             return new McpToolResult
             {
                 content = new[]
@@ -153,7 +158,8 @@ namespace Community.Unity.MCP
                         type = "text",
                         text = JsonUtility.ToJson(result, false) // [OPTIMIZED] prettyPrint 끄기 — 모든 도구 응답 ~30% 감소
                     }
-                }
+                },
+                isError = isError
             };
         }
 
@@ -246,6 +252,39 @@ namespace Community.Unity.MCP
         public string name;
         public string description;
         public McpInputSchema inputSchema;
+        public McpToolAnnotations annotations;
+    }
+
+    /// <summary>
+    /// MCP tool annotations. AI 가 읽기/쓰기/파괴적 도구를 구분할 근거가 된다.
+    /// 이전에는 이 정보가 전혀 없어 브릿지가 도구 이름 프리픽스로 추측했다.
+    /// </summary>
+    [Serializable]
+    public class McpToolAnnotations
+    {
+        public bool readOnlyHint;
+        public bool destructiveHint;
+        public bool idempotentHint;
+    }
+
+    /// <summary>
+    /// 도구가 null 을 반환했을 때의 기본 성공 응답.
+    /// 익명 타입(new { success = true })은 JsonUtility 가 "{}" 로 직렬화해 정보가 사라진다.
+    /// </summary>
+    [Serializable]
+    public class McpToolOk
+    {
+        public bool success;
+        public string tool;
+    }
+
+    /// <summary>
+    /// ping 응답. 역시 익명 타입을 쓰면 "{}" 가 된다.
+    /// </summary>
+    [Serializable]
+    public class McpPingResult
+    {
+        public bool pong;
     }
 
     [Serializable]

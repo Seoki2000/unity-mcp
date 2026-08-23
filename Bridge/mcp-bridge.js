@@ -164,6 +164,7 @@ function tryServeToolsFromCache(requestId, reason) {
     try {
         const cached = JSON.parse(fs.readFileSync(TOOLS_CACHE_PATH, 'utf8'));
         if (cached && Array.isArray(cached.tools) && cached.tools.length > 0) {
+            recordAnnotations(cached.tools);
             log(`tools/list served from cache (${cached.tools.length} tools, saved ${cached.savedAt}) — ${reason}`);
             console.log(JSON.stringify({ jsonrpc: '2.0', id: requestId, result: { tools: cached.tools } }));
             return true;
@@ -230,11 +231,35 @@ rl.on('line', (line) => {
     postToUnity(line, requestId, MAX_RETRIES, parsedLine);
 });
 
-// 재시도해도 안전한(부작용 없는/조회성) 도구 이름 프리픽스.
+// 도구별 MCP annotations (readOnlyHint / destructiveHint / idempotentHint).
+// tools/list 결과와 디스크 캐시에서 채운다. 서버가 실제로 선언한 값이므로
+// 이름 프리픽스 추측보다 정확하다.
+const toolAnnotations = new Map();
+
+function recordAnnotations(tools) {
+    if (!Array.isArray(tools)) return;
+    for (const t of tools) {
+        if (t && typeof t.name === 'string' && t.annotations) {
+            toolAnnotations.set(t.name, t.annotations);
+        }
+    }
+}
+
+// annotations 를 아직 모르는 도구(첫 tools/list 이전, 또는 구버전 서버)를 위한 폴백.
+// 프리픽스 추측이므로 부정확하다 — annotations 가 있으면 항상 그쪽을 쓴다.
 const IDEMPOTENT_TOOL_PREFIXES = ['unity_get_', 'unity_list', 'unity_search', 'unity_raycast', 'unity_overlap', 'unity_take_screenshot'];
 
 function isIdempotentTool(toolName) {
     if (!toolName) return false;
+
+    const ann = toolAnnotations.get(toolName);
+    if (ann) {
+        // 읽기 전용이거나 멱등이면 재전송해도 중복 부작용이 없다.
+        // 파괴적이라고 선언된 도구는 멱등 표시가 있어도 재시도하지 않는다.
+        if (ann.destructiveHint) return false;
+        return !!(ann.readOnlyHint || ann.idempotentHint);
+    }
+
     return IDEMPOTENT_TOOL_PREFIXES.some(prefix => toolName.startsWith(prefix));
 }
 
@@ -314,6 +339,7 @@ function postToUnity(line, requestId, retriesLeft, parsedLine, busyRetriesLeft, 
                         try {
                             const parsed = JSON.parse(normalized);
                             if (parsed && parsed.result && Array.isArray(parsed.result.tools)) {
+                                recordAnnotations(parsed.result.tools);
                                 saveToolsCache(parsed.result.tools);
                             }
                         } catch (e) { /* best-effort */ }
@@ -463,11 +489,25 @@ function connectSSE() {
 
         log('Connected to Unity MCP Server');
 
+        // ⚠️ 청크 경계 유실 방어. 기존 코드는 chunk 마다 독립적으로 split('\n') 했다.
+        //    TCP 청크는 SSE 이벤트 경계와 무관하게 쪼개지므로, "data: {...}" 한 줄이
+        //    두 청크에 걸치면 양쪽 조각 모두 startsWith('data: ') / JSON.parse 에 실패해
+        //    그 이벤트가 조용히 사라졌다. 완전한 줄만 처리하고 나머지는 버퍼에 남긴다.
+        let sseBuffer = '';
+
         res.on('data', (chunk) => {
-            const text = chunk.toString();
-            // SSE format: "data: {json}\n\n"
-            const lines = text.split('\n');
-            for (const line of lines) {
+            sseBuffer += chunk.toString();
+
+            let nl;
+            const lines = [];
+            while ((nl = sseBuffer.indexOf('\n')) >= 0) {
+                lines.push(sseBuffer.slice(0, nl));
+                sseBuffer = sseBuffer.slice(nl + 1);
+            }
+            // sseBuffer 에 남은 것은 아직 개행이 오지 않은 불완전한 줄이다. 다음 청크와 합쳐진다.
+
+            for (const rawLine of lines) {
+                const line = rawLine.endsWith('\r') ? rawLine.slice(0, -1) : rawLine;
                 if (line.startsWith('data: ')) {
                     const json = line.substring(6).trim();
                     if (json) {
@@ -510,6 +550,16 @@ function connectSSE() {
 
     req.end();
 }
+
+// 시작 시 디스크 캐시에서 annotations 를 미리 읽는다. 첫 tools/list 이전에 들어온
+// tools/call 에 대해서도 프리픽스 추측 대신 실제 선언값으로 재시도를 판단하기 위함.
+try {
+    const cached = JSON.parse(fs.readFileSync(TOOLS_CACHE_PATH, 'utf8'));
+    if (cached && Array.isArray(cached.tools)) {
+        recordAnnotations(cached.tools);
+        log(`Preloaded annotations for ${toolAnnotations.size} tools from cache.`);
+    }
+} catch (e) { /* 캐시 없음 — 폴백 휴리스틱을 쓴다 */ }
 
 // Start SSE listener
 connectSSE();

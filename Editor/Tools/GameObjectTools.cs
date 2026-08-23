@@ -84,7 +84,7 @@ namespace Community.Unity.MCP
             };
         }
 
-        [McpTool("unity_delete_gameobject", "Delete a GameObject from the scene", typeof(DeleteGameObjectArgs))]
+        [McpTool("unity_delete_gameobject", "Delete a GameObject from the scene", typeof(DeleteGameObjectArgs), Destructive = true)]
         public static object DeleteGameObject(string argsJson)
         {
             var args = JsonUtility.FromJson<DeleteGameObjectArgs>(argsJson);
@@ -114,7 +114,7 @@ namespace Community.Unity.MCP
             };
         }
 
-        [McpTool("unity_set_transform", "Set the transform (position, rotation, scale) of a GameObject", typeof(SetTransformArgs))]
+        [McpTool("unity_set_transform", "Set the transform (position, rotation, scale) of a GameObject", typeof(SetTransformArgs), Idempotent = true)]
         public static object SetTransform(string argsJson)
         {
             var args = JsonUtility.FromJson<SetTransformArgs>(argsJson);
@@ -216,7 +216,7 @@ namespace Community.Unity.MCP
             };
         }
 
-        [McpTool("unity_remove_component", "Remove a component from a GameObject", typeof(RemoveComponentArgs))]
+        [McpTool("unity_remove_component", "Remove a component from a GameObject", typeof(RemoveComponentArgs), Destructive = true)]
         public static object RemoveComponent(string argsJson)
         {
             var args = JsonUtility.FromJson<RemoveComponentArgs>(argsJson);
@@ -264,7 +264,7 @@ namespace Community.Unity.MCP
             };
         }
 
-        [McpTool("unity_set_component_property", "Set a property value on a component", typeof(SetPropertyArgs))]
+        [McpTool("unity_set_component_property", "Set a property value on a component", typeof(SetPropertyArgs), Idempotent = true)]
         public static object SetComponentProperty(string argsJson)
         {
             var args = JsonUtility.FromJson<SetPropertyArgs>(argsJson);
@@ -325,7 +325,7 @@ namespace Community.Unity.MCP
             }
         }
 
-        [McpTool("unity_get_component_properties", "Get the serialized properties of a component", typeof(GetComponentPropertiesArgs))]
+        [McpTool("unity_get_component_properties", "Get the serialized properties of a component", typeof(GetComponentPropertiesArgs), ReadOnly = true)]
         public static object GetComponentProperties(string argsJson)
         {
             var args = JsonUtility.FromJson<GetComponentPropertiesArgs>(argsJson);

@@ -11,7 +11,7 @@ namespace Community.Unity.MCP
     [McpToolProvider]
     public class AnimationTools
     {
-        [McpTool("unity_get_animator_controller_info", "Get the static graph structure (states, transitions, default states) of an Animator Controller", typeof(GetAnimatorControllerInfoArgs))]
+        [McpTool("unity_get_animator_controller_info", "Get the static graph structure (states, transitions, default states) of an Animator Controller", typeof(GetAnimatorControllerInfoArgs), ReadOnly = true)]
         public static object GetAnimatorControllerInfo(string argsJson)
         {
             var args = JsonUtility.FromJson<GetAnimatorControllerInfoArgs>(argsJson);
@@ -141,7 +141,7 @@ namespace Community.Unity.MCP
             return info;
         }
 
-        [McpTool("unity_set_animator_parameter", "Set a parameter on an Animator component", typeof(SetAnimatorParameterArgs))]
+        [McpTool("unity_set_animator_parameter", "Set a parameter on an Animator component", typeof(SetAnimatorParameterArgs), Idempotent = true)]
         public static object SetAnimatorParameter(string argsJson)
         {
             var args = JsonUtility.FromJson<SetAnimatorParameterArgs>(argsJson);
@@ -196,7 +196,7 @@ namespace Community.Unity.MCP
             }
         }
 
-        [McpTool("unity_get_animator_info", "Get information about an Animator component", typeof(GetAnimatorInfoArgs))]
+        [McpTool("unity_get_animator_info", "Get information about an Animator component", typeof(GetAnimatorInfoArgs), ReadOnly = true)]
         public static object GetAnimatorInfo(string argsJson)
         {
             var args = JsonUtility.FromJson<GetAnimatorInfoArgs>(argsJson);

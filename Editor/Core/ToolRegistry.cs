@@ -22,6 +22,27 @@ namespace Community.Unity.MCP
         public string Description { get; }
         public Type ArgsType { get; }
 
+        // ⚠️ 아래 세 개는 선택적 named property 다. 생성자 시그니처는 절대 바꾸지 말 것 —
+        //    패키지 밖(프로젝트 Assets/) 에서 [McpTool(name, desc, typeof(Args))] 형태로
+        //    툴을 등록하는 코드가 있고, 그게 깨지면 프로젝트가 컴파일되지 않는다.
+
+        /// <summary>
+        /// 프로젝트/에디터 상태를 바꾸지 않는 조회성 도구. MCP readOnlyHint 로 노출된다.
+        /// 지정하지 않으면 false — "쓸 수도 있다"는 보수적 기본값이다.
+        /// </summary>
+        public bool ReadOnly { get; set; }
+
+        /// <summary>
+        /// 되돌리기 어려운 변경을 한다(삭제/덮어쓰기 등). MCP destructiveHint.
+        /// </summary>
+        public bool Destructive { get; set; }
+
+        /// <summary>
+        /// 같은 인자로 반복 호출해도 결과가 같다. MCP idempotentHint.
+        /// 브릿지의 재시도 판단에 쓰인다(문자열 프리픽스 추측을 대체).
+        /// </summary>
+        public bool Idempotent { get; set; }
+
         public McpToolAttribute(string name, string description, Type argsType = null)
         {
             Name = name;
@@ -61,6 +82,9 @@ namespace Community.Unity.MCP
             public MethodInfo Method;
             public object Instance;
             public Type ArgsType;
+            public bool ReadOnly;
+            public bool Destructive;
+            public bool Idempotent;
         }
 
         /// <summary>
@@ -102,16 +126,26 @@ namespace Community.Unity.MCP
                             var attr = method.GetCustomAttribute<McpToolAttribute>();
                             if (attr == null) continue;
 
+                            // 같은 이름을 조용히 덮어쓰면 어느 구현이 사는지 알 수 없다.
+                            if (_tools.TryGetValue(attr.Name, out var existing))
+                            {
+                                Debug.LogWarning(
+                                    $"[MCP] Duplicate tool name '{attr.Name}': " +
+                                    $"{existing.Method.DeclaringType?.FullName}.{existing.Method.Name} " +
+                                    $"is being replaced by {type.FullName}.{method.Name}.");
+                            }
+
                             _tools[attr.Name] = new ToolInfo
                             {
                                 Name = attr.Name,
                                 Description = attr.Description,
                                 Method = method,
                                 Instance = method.IsStatic ? null : instance,
-                                ArgsType = attr.ArgsType
+                                ArgsType = attr.ArgsType,
+                                ReadOnly = attr.ReadOnly,
+                                Destructive = attr.Destructive,
+                                Idempotent = attr.Idempotent
                             };
-
-                            Debug.Log($"[MCP] Registered tool: {attr.Name}");
                         }
                     }
                 }
@@ -140,7 +174,14 @@ namespace Community.Unity.MCP
                 {
                     name = tool.Name,
                     description = tool.Description,
-                    inputSchema = SchemaGenerator.GenerateSchema(tool.ArgsType)
+                    inputSchema = SchemaGenerator.GenerateSchema(tool.ArgsType),
+                    // 읽기 전용 도구는 정의상 파괴적이지 않고 멱등이다.
+                    annotations = new McpToolAnnotations
+                    {
+                        readOnlyHint = tool.ReadOnly,
+                        destructiveHint = !tool.ReadOnly && tool.Destructive,
+                        idempotentHint = tool.ReadOnly || tool.Idempotent
+                    }
                 });
             }
 
@@ -178,7 +219,8 @@ namespace Community.Unity.MCP
                 }
 
                 var result = tool.Method.Invoke(tool.Instance, args);
-                return result ?? new { success = true };
+                // 익명 타입은 JsonUtility 가 "{}" 로 직렬화해 정보가 사라진다. 명명된 타입을 쓴다.
+                return result ?? new McpToolOk { success = true, tool = name };
             }
             catch (TargetInvocationException ex)
             {

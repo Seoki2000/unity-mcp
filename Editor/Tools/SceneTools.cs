@@ -14,24 +14,33 @@ namespace Community.Unity.MCP
     [McpToolProvider]
     public class SceneTools
     {
-        [McpTool("unity_get_scenes", "List all scenes in the project")]
+        [McpTool("unity_get_scenes", "List scenes in the project. Paginated: pass offset from the previous response's nextOffset to continue.", typeof(GetScenesArgs), ReadOnly = true)]
         public static object GetScenes(string argsJson)
         {
+            var args = JsonUtility.FromJson<GetScenesArgs>(argsJson);
             var scenes = new List<SceneInfo>();
-            
+
             // Find all scene assets
             var sceneGuids = AssetDatabase.FindAssets("t:Scene", new[] { "Assets" });
-            
-            foreach (var guid in sceneGuids)
+
+            // 이 도구는 상한이 전혀 없었다 — 씬이 많은 프로젝트에서 응답이 그대로 폭주한다.
+            int limit = McpPaging.ClampLimit(args?.maxResults ?? 0, 50, 500);
+            int offset = McpPaging.ClampOffset(args?.offset ?? 0);
+
+            // 빌드 설정은 루프 밖에서 1회만 읽는다(기존은 씬마다 재조회 — O(씬 x 빌드씬)).
+            var buildScenes = EditorBuildSettings.scenes;
+
+            for (int si = offset; si < sceneGuids.Length && scenes.Count < limit; si++)
             {
+                var guid = sceneGuids[si];
                 var path = AssetDatabase.GUIDToAssetPath(guid);
                 var isInBuild = false;
                 var buildIndex = -1;
                 
                 // Check if scene is in build settings
-                for (int i = 0; i < EditorBuildSettings.scenes.Length; i++)
+                for (int i = 0; i < buildScenes.Length; i++)
                 {
-                    if (EditorBuildSettings.scenes[i].path == path)
+                    if (buildScenes[i].path == path)
                     {
                         isInBuild = true;
                         buildIndex = i;
@@ -51,14 +60,19 @@ namespace Community.Unity.MCP
                 });
             }
             
+            int next = McpPaging.NextOffset(offset, scenes.Count, sceneGuids.Length);
             return new GetScenesResult
             {
-                totalCount = scenes.Count,
+                totalCount = sceneGuids.Length,   // 기존은 반환한 개수를 전체로 보고해 AI 가 누락을 알 수 없었다
+                returnedCount = scenes.Count,
+                offset = offset,
+                nextOffset = next,
+                truncated = next >= 0,
                 scenes = scenes.ToArray()
             };
         }
 
-        [McpTool("unity_open_scene", "Open a scene in the editor", typeof(OpenSceneArgs))]
+        [McpTool("unity_open_scene", "Open a scene in the editor", typeof(OpenSceneArgs), Idempotent = true)]
         public static object OpenScene(string argsJson)
         {
             var args = JsonUtility.FromJson<OpenSceneArgs>(argsJson);
@@ -98,7 +112,7 @@ namespace Community.Unity.MCP
             };
         }
 
-        [McpTool("unity_save_scene", "Save the current scene", typeof(SaveSceneArgs))]
+        [McpTool("unity_save_scene", "Save the current scene", typeof(SaveSceneArgs), Idempotent = true)]
         public static object SaveScene(string argsJson)
         {
             var args = JsonUtility.FromJson<SaveSceneArgs>(argsJson);
@@ -210,7 +224,7 @@ namespace Community.Unity.MCP
             };
         }
 
-        [McpTool("unity_set_active_scene", "Set the active scene (when multiple scenes are loaded)", typeof(SetActiveSceneArgs))]
+        [McpTool("unity_set_active_scene", "Set the active scene (when multiple scenes are loaded)", typeof(SetActiveSceneArgs), Idempotent = true)]
         public static object SetActiveScene(string argsJson)
         {
             var args = JsonUtility.FromJson<SetActiveSceneArgs>(argsJson);
@@ -297,7 +311,18 @@ namespace Community.Unity.MCP
         public class GetScenesResult
         {
             public int totalCount;
+            public int returnedCount;
+            public int offset;
+            public int nextOffset;   // 더 없으면 -1
+            public bool truncated;
             public SceneInfo[] scenes;
+        }
+
+        [Serializable]
+        public class GetScenesArgs
+        {
+            [McpParam("Maximum results (default 50, max 500)")] public int maxResults;
+            [McpParam("Start index. Pass the previous response's nextOffset to continue")] public int offset;
         }
 
         [Serializable]
