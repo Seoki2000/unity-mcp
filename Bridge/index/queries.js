@@ -949,6 +949,9 @@ function getAssetComponents(index, args) {
   };
 }
 
-module.exports = { findReferences, findComponentUsages, findMissingScripts, getTypeSymbols,
+// _checkFields 는 전수 측정용 시임이다. 도구 응답과 **같은 코드**로 재야 수치가 의미를 갖는다
+// (도구를 통해 재면 파일당 500개 페이지 상한에 걸려 과소 집계된다 — 실제로 한 번 그랬다).
+module.exports = { _checkFields: checkFields,
+                   findReferences, findComponentUsages, findMissingScripts, getTypeSymbols,
                    findCallers, findCallees, status, resolveGuid, resolveScriptType,
                    getAssetComponents };

@@ -28,7 +28,7 @@ repo; a bridge launcher that resolves `PackageCache` at run time. Tools: **67 �
 | `2ea969e` | 24,968 | 67 | 372.7 |
 | dev-0.0.1 before diet | 40,376 | 81 | 498.5 |
 | dev-0.0.1 now | 37,067 | 81 | 457.6 |
-| **dev-0.0.2** | **39,589** | **82** | **482.8** |
+| **dev-0.0.2** | **39,669** | **82** | **483.8** |
 
 That is **+48.5%** over the old pin — roughly +3,000 tokens per session. dev-0.0.1 claws
 back 3,309 B of it losslessly by omitting annotation hints that equal the MCP spec defaults.
@@ -57,22 +57,34 @@ against the compiled type, so keys left behind by renamed fields are visible. Me
 all 1,144 text assets (181 MB, 69,891 documents): 0 unparsed lines, and every GUID the
 independent regex scanner finds also appears in the parsed value tree.
 
-**Accuracy fixes in dev-0.0.2.** Three assets — including the `.ttf` behind a TMP font asset
-— reported *zero* references because VFX Graph writes object references as JSON inside a
-YAML string (`"guid":"…"`) and TMP/Addressables write bare GUIDs; the reverse index now
-counts any 32-hex token that is a real asset GUID (+22 edges, YAML scan 515 ms → 1.9 s).
+**Accuracy fixes in dev-0.0.2.** Assets reported *zero* references in three different ways.
+VFX Graph writes object references as JSON inside a YAML string (`"guid":"…"`) and
+TMP/Addressables write bare GUIDs — 3 assets, including the `.ttf` behind a TMP font asset.
+`.shadergraph` and `.asmdef` were outside the extension whitelist entirely — 19 more assets,
+found by an adversarial audit. And `.meta` importer settings reference materials
+(`externalObjects`) but were never read as a reference source — 18 more. The extension
+whitelist is gone: the scan now picks files by *content* (no NUL in the first 512 bytes),
+which costs 357 ms of sniffing and reads 8.7 MB of text while skipping 945 MB of binaries.
+Edges 6,021 → 6,244. Self-references (an asset writing its own GUID) no longer count, and
+edges found by matching text in source or docs are reported separately as `textualMatches`.
+
 Scripts whose class body is empty (`partial class X : Y { }`) have no method bodies, so the
 PDB maps no source file to them and their type went unresolved with a wrong reason; there is
-now a guarded filename fallback. The index cache lost its fingerprint after merging
-`PackageCache`, silently forcing a full rebuild every session. `tools/list` served from the
-disk cache omitted newly added bridge tools — exactly when Unity is down and they matter most.
+now a guarded filename fallback — the first, unguarded version immediately resolved URP's
+`Volume.cs` to a project class of the same short name. The index cache lost its fingerprint
+after merging `PackageCache`, silently forcing a full rebuild every session. `tools/list`
+served from the disk cache omitted newly added bridge tools — exactly when Unity is down and
+they matter most. And the new value tool read any file the caller named: `../../..` escaped
+the project root, re-introducing on the JS side what Phase 0-A had guarded in C#.
 
-**Known limits:** no incremental index refresh (call `unity_index_rebuild` after asset
-changes); `totalReferenceCount` counts (asset, GUID) pairs, not raw occurrences;
-`unity_find_callers` indexes project-internal calls only and merges overloads under
-`Type::Method`; component values are re-parsed per query (4 ms for a typical prefab, 0.7 s
-for the largest 17 MB one); package scripts have no symbols, so their type resolves to
-`null` rather than a name; `tools/list` is still larger than in `2ea969e`.
+**Known limits:** references that never store a GUID — `Resources.Load("path")`, Addressables
+addresses, run-time paths — are invisible to any static index, and a zero result says so; no
+incremental index refresh (call `unity_index_rebuild` after asset changes);
+`totalReferenceCount` counts (asset, GUID) pairs, not raw occurrences; `unity_find_callers`
+indexes project-internal calls only and merges overloads under `Type::Method`; component
+values are re-parsed per query (4 ms for a typical prefab, 0.7 s for the largest 17 MB one);
+package scripts have no symbols, so 5,554 of 7,019 script components resolve to `null` rather
+than a type name; `tools/list` is still larger than in `2ea969e`.
 
 ## What is MCP?
 MCP is an open standard by Anthropic that allows AI systems to access external tools and data. This package turns Unity into an MCP server, letting AI assistants like **Antigravity**, **Claude**, and **Cursor** seamlessly query your scenes, modify assets, and execute editor commands.
