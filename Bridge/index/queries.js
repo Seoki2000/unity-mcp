@@ -204,17 +204,45 @@ function findReferences(index, args) {
     nextOffset: page.nextOffset,
     truncated: page.truncated,
     references: page.items,
+    // 이 중 어느 것이 **텍스트 일치**로만 얻은 것인지 구분해 준다.
+    // 직렬화 구조(프리팹의 참조 필드, .meta 임포터 설정)가 아니라 소스코드·문서·그래프 JSON
+    // 안에서 32자리 hex 를 찾은 경우다. 대부분 진짜 참조지만(셰이더그래프의 텍스처,
+    // asmdef 의 어셈블리 의존), GUID 를 단순히 적어둔 문자열일 수도 있다.
+    // 구분 없이 합쳐 내면 "참조 1건" 이 어느 쪽인지 알 수 없어 삭제 판단이 흐려진다.
+    ...(() => {
+      const weak = index.weakRefs ? index.weakRefs.get(guid) : null;
+      if (!weak || !weak.size) return {};
+      const inPage = page.items.filter(p => weak.has(p));
+      if (!inPage.length) return {};
+      return {
+        textualMatches: inPage,
+        textualMatchNote: 'These came from matching the GUID as text in a non-serialized file ' +
+          '(shader graph, asmdef, source, docs), not from a serialized reference field. Usually real, ' +
+          'but verify before treating them as the only thing keeping this asset alive.',
+      };
+    })(),
     // 0 은 두 가지 뜻이 될 수 있다 — 정말 참조가 없거나, 참조하는 파일 종류를 안 봤거나.
     // 구분이 안 되면 "미사용이니 지워도 된다" 로 잘못 읽힌다. 그래서 0 일 때만 근거를 싣는다.
     ...(page.total === 0 ? {
-      scannedExtensions: scannedExtensions(),
-      note: 'totalCount is 0. This index reads GUID references only from the file types listed in ' +
-            'scannedExtensions; a third-party asset type outside that list would not be seen. ' +
-            'Cross-check with unity_search_project (searchType=reference) before concluding an asset ' +
-            'is unreferenced — but note that neither source is complete on its own. Measured 2026-08-23: ' +
-            'Unity AssetDatabase.GetDependencies does NOT report VFX Graph internal references, so it ' +
-            'returns 0 for .shadergraph and .vfxblock assets that .vfx files do reference, where this ' +
-            'index finds them. Treat a zero from either side as unproven, not as proof of no reference.',
+      // 0 일 때만 근거를 싣는다. 무엇을 봤고 무엇을 못 봤는지 없이 "0" 만 주면
+      // "미사용이니 지워도 된다" 로 읽힌다.
+      scanned: index.stats ? {
+        yamlFiles: index.stats.yamlFiles,
+        metaFiles: index.stats.metaFiles,
+        otherTextFiles: index.stats.otherTextFiles,
+        binaryFilesSkipped: index.stats.otherBinarySkipped,
+        largeTextFilesSkipped: index.stats.otherLargeSkipped,
+      } : null,
+      note: 'totalCount is 0. This index scans every *text* file under Assets for GUID references — ' +
+            'the serialized asset types, .meta importer settings, and any other file whose first bytes ' +
+            'contain no NUL (shader graphs, asmdefs, source, docs). What it still cannot see: references ' +
+            'inside binary files (skipped by content sniffing), text files over 16 MB, and references ' +
+            'that never store the GUID at all — Resources.Load("path"), Addressables addresses, or any ' +
+            'path assembled at run time. Those are invisible to any static index. ' +
+            'Cross-check with unity_search_project (searchType=reference) as a second opinion, but note ' +
+            'that neither source is complete: measured 2026-08-23, Unity AssetDatabase.GetDependencies ' +
+            'does NOT report VFX Graph internal references. Treat a zero from either side as unproven, ' +
+            'not as proof of no reference.',
     } : {}),
   };
 }
@@ -518,6 +546,48 @@ const COMPONENT_NOISE_KEYS = new Set([
 ]);
 
 const MAX_ASSET_BYTES = 32 * 1024 * 1024;
+// 경로 봉쇄. `Editor/Core/McpPathGuard.cs` 와 **같은 정책을 JS 쪽에도** 둔다.
+//
+// 왜 여기 필요한가 — 이 파일의 다른 질의는 전부 맵 조회라 파일을 열지 않는다.
+// getAssetComponents 는 호출자가 준 경로로 **파일을 직접 읽는 첫 로컬 도구**다.
+// 봉쇄 없이 path.join(root, asset) 을 하면 `../../..` 로 프로젝트 밖 파일이 읽힌다.
+// 실측(2026-08-24): 프로젝트 밖 .prefab 을 만들어 상대 경로로 부르니 내용이 그대로 응답에 실렸다.
+// Phase 0-A(2bb84de)에서 C# 쪽에 막아 둔 것을 JS 쪽에 다시 들여온 셈이었다.
+//
+// 정책(C# 쪽과 동일):
+//   - 절대 경로/드라이브 지정/UNC 거부. 프로젝트 루트 기준 상대 경로만 받는다
+//   - `..` 문자열 검사가 아니라 정규화 후 접두사 검사. 디렉터리 경계까지 본다
+//   - 에셋 루트(Assets / Packages / Library/PackageCache) 아래일 것
+// 알려진 한계도 동일하다: 검사는 어휘적이라 프로젝트 안의 정션은 통과한다.
+// 그 정션(Assets/50.Art)은 의도된 구조라 막지 않는다 — McpPathGuard 주석의 판단 근거 참조.
+// ProjectSettings 를 넣은 이유: 이 인덱스 전체가 **텍스트 직렬화**를 전제로 하는데,
+// 그걸 확인할 수 있는 곳이 `ProjectSettings/EditorSettings.asset` 이다(Force Binary 면 전부 무의미하다).
+// 프로젝트 루트 안이므로 봉쇄는 그대로 유지된다.
+const ASSET_ROOTS_RE = /^(Assets|Packages|ProjectSettings|Library\/PackageCache)(\/|$)/i;
+
+function containedAssetPath(root, input) {
+  const raw = String(input == null ? '' : input).replace(/\\/g, '/').trim();
+  if (!raw) return { error: "asset is required — pass an asset path (e.g. 'Assets/X.prefab') or a 32-character GUID." };
+  if (/^[a-zA-Z]:/.test(raw) || raw.startsWith('/')) {
+    return { error: `'${raw}' is absolute. Pass a path relative to the project root (e.g. 'Assets/X.prefab').` };
+  }
+
+  const norm = path.posix.normalize(raw);
+  if (norm === '..' || norm.startsWith('../')) {
+    return { error: `'${raw}' resolves outside the project root.` };
+  }
+  if (!ASSET_ROOTS_RE.test(norm)) {
+    return { error: `'${raw}' is not under Assets/, Packages/, ProjectSettings/ or Library/PackageCache/.` };
+  }
+
+  const rootAbs = path.resolve(root);
+  const abs = path.resolve(rootAbs, norm);
+  if (abs !== rootAbs && !abs.startsWith(rootAbs + path.sep)) {
+    return { error: `'${raw}' resolves outside the project root.` };
+  }
+  return { rel: norm, abs };
+}
+
 
 /** 값 트리를 걸으며 참조를 해석해 넣는다. 원본 객체를 직접 고친다(방금 파싱한 것이라 안전하다). */
 function annotateReferences(index, node, localDocs, depth) {
@@ -658,13 +728,19 @@ function getAssetComponents(index, args) {
     return { error: "asset is required — pass an asset path (e.g. 'Assets/X.prefab') or a 32-character GUID." };
   }
 
-  const abs = path.join(index.root, asPath);
+  const guard = containedAssetPath(index.root, asPath);
+  if (guard.error) return { error: guard.error };
+  const abs = guard.abs;
+
   let st;
   try { st = fs.statSync(abs); } catch {
     return {
       error: `'${asPath}' not found under the project root. Pass a project-relative path or a GUID. ` +
              (guid ? '' : 'The index does not know this GUID — it may be stale (unity_index_rebuild).'),
     };
+  }
+  if (!st.isFile()) {
+    return { error: `'${asPath}' is a directory, not an asset file.` };
   }
   if (st.size > MAX_ASSET_BYTES) {
     return {
@@ -705,7 +781,10 @@ function getAssetComponents(index, args) {
     unparsedTotal += r.unparsed;
     for (const s of r.unparsedSamples || []) if (unparsedSamples.length < 5) unparsedSamples.push(s);
     const name = r.body && typeof r.body.m_Name === 'string' ? r.body.m_Name : '';
-    parsed.push({ doc: d, className: r.className, body: r.body || {}, name });
+    // 파서가 상한(maxArrayItems / 키 400개)에 걸려 잘랐는지. 이걸 안 실으면 배열이
+    // 200개에서 조용히 끊긴 채로 나간다 — 실측(2026-08-24): 기본 상한에서 문서 24개가
+    // 그렇게 잘리고 있었고 응답에는 아무 표시가 없었다.
+    parsed.push({ doc: d, className: r.className, body: r.body || {}, name, parseTruncated: !!r.truncated });
 
     // 라벨은 조인 결과를 쓴다. 'MonoBehaviour' 라고만 하면 무엇을 가리키는 참조인지 알 수 없다.
     // 같은 GUID 가 문서마다 반복되므로 파일 안에서 한 번만 해석한다.
@@ -806,7 +885,13 @@ function getAssetComponents(index, args) {
     const values = {};
     for (const k of Object.keys(p.body)) {
       if (!args.includeUnityKeys && COMPONENT_NOISE_KEYS.has(k)) continue;
-      if (!args.includeUnityKeys && k === 'm_Name' && script) continue;   // MonoBehaviour 의 m_Name 은 항상 빈 값이다
+      // MonoBehaviour 컴포넌트의 m_Name 은 항상 빈 값이라 감춘다. 하지만 ScriptableObject
+      // (.asset)는 같은 MonoBehaviour 문서인데 m_Name 이 **에셋 이름**이다 — 실제 데이터다.
+      // script 유무로만 판단하면 그걸 통째로 버린다(IngameLibrary.asset 에서 그랬다).
+      // 빈 값은 `''` 로도 `null` 로도 온다 — `m_Name: ` 뒤에 아무것도 없으면 파서가 null 을 낸다.
+      // 둘 다 보지 않으면 감추려던 빈 키가 그대로 남는다.
+      if (!args.includeUnityKeys && k === 'm_Name' && script &&
+          (p.body[k] === '' || p.body[k] === null)) continue;
       values[k] = p.body[k];
     }
     annotateReferences(index, values, localDocs, 0);
@@ -824,6 +909,11 @@ function getAssetComponents(index, args) {
         ? { fieldCheck: checkFields(sym, sym.typeByFullName.get(script.type.fullName), values) }
         : {}),
       values: capped.values,
+      ...(p.parseTruncated ? {
+        parseTruncated: true,
+        parseTruncationNote: 'While parsing, an array hit maxArrayItems (default 200) or a map hit 400 keys, ' +
+          'so part of this object is not in the values above. Raise maxArrayItems to see the rest.',
+      } : {}),
       ...(capped.droppedKeys || capped.droppedItems
         ? { valuesTruncated: true,
             ...(capped.droppedKeys ? { droppedKeyCount: capped.droppedKeys } : {}),
