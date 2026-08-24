@@ -7,19 +7,19 @@
 *Read this in other languages: [한국어](README_ko.md)*
 A **Model Context Protocol (MCP)** server for Unity that enables AI agents to **query and control** the Unity Editor. This local-optimized version is enhanced with additional tools for Behavior Trees, Window Management, and advanced GameObject/Hierarchy manipulation.
 
-## Fork dev build — dev-0.0.1
+## Fork dev build — dev-0.0.2
 
 This fork (`Seoki2000/unity-mcp`, branch `optimized`) diverges from upstream. Numbers below
 are measured against a live Unity editor, not estimated. Full record in Korean:
 [README_ko.md](README_ko.md#포크-개발-버전--dev-001).
 
-Package version: `2.3.0-dev.0.0.1` · baseline commit: `5331a34`
+Package version: `2.3.0-dev.0.0.2` · baseline commit: `5331a34`
 
 **Added since the previously pinned `2ea969e`:** path-escape guard and session-token auth;
 tool annotations, pagination and response caps; an out-of-process project index (reverse
-reference lookup, assembly symbols with PDB source mapping, IL call graph — 8 bridge-side
-tools); 6 Behavior authoring tools reclaimed from the game repo; a bridge launcher that
-resolves `PackageCache` at run time. Tools: **67 → 81**, none removed.
+reference lookup, assembly symbols with PDB source mapping, IL call graph, serialized
+component values — 9 bridge-side tools); 6 Behavior authoring tools reclaimed from the game
+repo; a bridge launcher that resolves `PackageCache` at run time. Tools: **67 → 82**, none removed.
 
 **`tools/list` fixed cost went up, not down.**
 
@@ -27,7 +27,8 @@ resolves `PackageCache` at run time. Tools: **67 → 81**, none removed.
 |---|---|---|---|
 | `2ea969e` | 24,968 | 67 | 372.7 |
 | dev-0.0.1 before diet | 40,376 | 81 | 498.5 |
-| **dev-0.0.1 now** | **37,067** | **81** | **457.6** |
+| dev-0.0.1 now | 37,067 | 81 | 457.6 |
+| **dev-0.0.2** | **39,589** | **82** | **482.8** |
 
 That is **+48.5%** over the old pin — roughly +3,000 tokens per session. dev-0.0.1 claws
 back 3,309 B of it losslessly by omitting annotation hints that equal the MCP spec defaults.
@@ -47,10 +48,31 @@ files. After the fix: `.meta` 2,037 → 3,142, YAML 783 → 1,131, reference edg
 and `unity_find_missing_scripts` went from 9 broken GUIDs to 13 (cross-checked against an
 independent scan). Unfollowable links are now counted in `skipped` instead of vanishing.
 
+**dev-0.0.2 — reading serialized values.** `unity_get_asset_components` reads a prefab,
+scene or asset and returns each component with its field values, resolving every
+`m_Script` GUID to the type that actually compiles today and every object reference to an
+asset path. Reading `.cs` cannot answer this (the values live in the asset) and reading the
+YAML cannot either (the asset stores a GUID, not a type name). Serialized keys are checked
+against the compiled type, so keys left behind by renamed fields are visible. Measured over
+all 1,144 text assets (181 MB, 69,891 documents): 0 unparsed lines, and every GUID the
+independent regex scanner finds also appears in the parsed value tree.
+
+**Accuracy fixes in dev-0.0.2.** Three assets — including the `.ttf` behind a TMP font asset
+— reported *zero* references because VFX Graph writes object references as JSON inside a
+YAML string (`"guid":"…"`) and TMP/Addressables write bare GUIDs; the reverse index now
+counts any 32-hex token that is a real asset GUID (+22 edges, YAML scan 515 ms → 1.9 s).
+Scripts whose class body is empty (`partial class X : Y { }`) have no method bodies, so the
+PDB maps no source file to them and their type went unresolved with a wrong reason; there is
+now a guarded filename fallback. The index cache lost its fingerprint after merging
+`PackageCache`, silently forcing a full rebuild every session. `tools/list` served from the
+disk cache omitted newly added bridge tools — exactly when Unity is down and they matter most.
+
 **Known limits:** no incremental index refresh (call `unity_index_rebuild` after asset
 changes); `totalReferenceCount` counts (asset, GUID) pairs, not raw occurrences;
 `unity_find_callers` indexes project-internal calls only and merges overloads under
-`Type::Method`; `tools/list` is still larger than in `2ea969e`.
+`Type::Method`; component values are re-parsed per query (4 ms for a typical prefab, 0.7 s
+for the largest 17 MB one); package scripts have no symbols, so their type resolves to
+`null` rather than a name; `tools/list` is still larger than in `2ea969e`.
 
 ## What is MCP?
 MCP is an open standard by Anthropic that allows AI systems to access external tools and data. This package turns Unity into an MCP server, letting AI assistants like **Antigravity**, **Claude**, and **Cursor** seamlessly query your scenes, modify assets, and execute editor commands.
