@@ -215,9 +215,20 @@ function tryServeToolsFromCache(requestId, reason) {
     try {
         const cached = JSON.parse(fs.readFileSync(TOOLS_CACHE_PATH, 'utf8'));
         if (cached && Array.isArray(cached.tools) && cached.tools.length > 0) {
-            recordAnnotations(cached.tools);
-            log(`tools/list served from cache (${cached.tools.length} tools, saved ${cached.savedAt}) — ${reason}`);
-            console.log(JSON.stringify({ jsonrpc: '2.0', id: requestId, result: { tools: cached.tools } }));
+            // 로컬(브릿지) 도구는 캐시가 아니라 **지금 코드**에서 다시 만든다.
+            // 캐시를 그대로 내면 패키지를 올려 도구를 추가/수정해도 Unity 가 꺼져 있거나
+            // 리로드 중인 동안에는 옛 목록이 나간다 — 실측(2026-08-24): 이번에 추가한
+            // unity_get_asset_components 가 목록에서 통째로 빠졌다. 로컬 도구는 Unity 없이
+            // 동작하는 것이 존재 이유이므로, 하필 Unity 가 없을 때 사라지면 안 된다.
+            const tools = cached.tools.filter(t => !(t && indexTools.isLocalTool(t.name)));
+            const fromCache = cached.tools.length - tools.length;
+            for (const local of indexTools.toolDefinitions()) tools.push(local);
+            slimToolList(tools);
+
+            recordAnnotations(tools);
+            log(`tools/list served from cache (${tools.length} tools, saved ${cached.savedAt}, ` +
+                `${fromCache} cached local defs replaced with current ones) — ${reason}`);
+            console.log(JSON.stringify({ jsonrpc: '2.0', id: requestId, result: { tools } }));
             return true;
         }
     } catch (e) { /* 캐시 없음/손상 — 폴백 불가 */ }
