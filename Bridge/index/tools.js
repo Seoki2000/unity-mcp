@@ -26,6 +26,7 @@ const LOCAL_TOOL_NAMES = new Set([
   'unity_get_type_symbols',
   'unity_find_callers',
   'unity_find_callees',
+  'unity_get_asset_components',
 ]);
 
 let _index = null;
@@ -353,6 +354,27 @@ function toolDefinitions() {
       annotations: ro,
     },
     {
+      name: 'unity_get_asset_components',
+      description: 'Read the components of a prefab/scene/asset with their serialized field values, resolving each m_Script GUID to the compiled type name. Answers "what is attached here and what is each field set to" — which reading .cs cannot (values live in the asset) and reading the YAML alone cannot (the asset stores a GUID, not a type name). Object references resolve to asset paths; serialized keys are checked against the compiled type, so stale keys left by renamed fields are visible.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          asset: { type: 'string', description: "Asset path (e.g. 'Assets/2.Prefabs/Player.prefab') or its 32-character GUID" },
+          component: { type: 'string', description: 'Only components whose type name contains this (case-insensitive)' },
+          gameObject: { type: 'string', description: 'Only components on GameObjects whose name contains this' },
+          fileID: { type: 'string', description: 'Only the object with this fileID (the &anchor)' },
+          includeGameObjects: { type: 'boolean', description: 'Include GameObject documents (default true)' },
+          includeUnityKeys: { type: 'boolean', description: 'Include Unity header keys (m_ObjectHideFlags etc; default false)' },
+          maxDepth: { type: 'integer', description: 'Value nesting depth (default 8, max 32)' },
+          maxArrayItems: { type: 'integer', description: 'Items per array (default 200, max 2000)' },
+          maxValueBytes: { type: 'integer', description: 'Value bytes per component (default 16000, max 200000)' },
+          ...paging,
+        },
+        required: ['asset'],
+      },
+      annotations: ro,
+    },
+    {
       name: 'unity_find_missing_scripts',
       description: 'Find assets whose components reference a script that no longer exists (Editor shows "The associated script can not be loaded"). Found by joining serialized m_Script GUIDs against .meta files.',
       inputSchema: { type: 'object', properties: { ...paging }, required: [] },
@@ -394,6 +416,7 @@ function callLocalTool(name, args, port) {
   else if (name === 'unity_get_type_symbols') result = queries.getTypeSymbols(idx, a);
   else if (name === 'unity_find_callers') result = queries.findCallers(idx, a);
   else if (name === 'unity_find_callees') result = queries.findCallees(idx, a);
+  else if (name === 'unity_get_asset_components') result = queries.getAssetComponents(idx, a);
   else if (name === 'unity_find_missing_scripts') {
     // Missing Script 판정에는 전체 GUID 커버리지가 필수다.
     // Assets/Packages 만으로 판정하면 패키지 스크립트가 전부 'missing' 으로 잡힌다

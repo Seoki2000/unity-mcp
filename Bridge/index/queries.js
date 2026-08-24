@@ -2,7 +2,10 @@
 // 인덱스 위의 질의. 전부 맵 조회이므로 sub-ms 다.
 // 비교: 인덱스 없는 현재 구현은 역참조 1건에 2,425 ms 이고 에디터 메인 스레드를 점유한다.
 
+const fs = require('fs');
+const path = require('path');
 const { YAML_EXT } = require('./scan');
+const yaml = require('./yamlvalues');
 
 const GUID_RE = /^[0-9a-f]{32}$/;
 
@@ -90,12 +93,46 @@ function resolveScriptType(index, guid) {
   const sym = index.symbols;
   if (!sym) return { resolved: false, csPath, reason: 'symbol index not built' };
 
-  const candidates = sym.typesBySourceFile.get(csPath) || [];
+  const stemOf = p => p.slice(p.lastIndexOf('/') + 1).replace(/\.cs$/i, '');
+  let candidates = sym.typesBySourceFile.get(csPath) || [];
+  let viaFilename = false;
+
   if (!candidates.length) {
-    return {
-      resolved: false, csPath,
-      reason: 'no compiled type maps to this file (script may not compile, or its assembly was not built)',
-    };
+    // PDB 소스 매핑은 **메서드 본문**에서 나온다(MethodDebugInformation → Document).
+    // 그래서 본문이 없는 타입은 어느 파일에서 왔는지 PDB 가 말해주지 않는다:
+    //   public sealed partial class BossStateChanged : EventChannel<TwentyThreeState> { }
+    // 실측(2026-08-24, MainProject): Assets 안 스크립트 GUID 4개가 이 형태로 해석에 실패했고
+    // 이유는 "컴파일 안 됐거나 어셈블리가 안 빌드됐다" 로 **틀리게** 보고됐다. 실제로는 잘 컴파일된다.
+    //
+    // Unity 는 MonoScript 로 쓰이는 타입의 이름이 파일명과 같을 것을 요구하므로,
+    // 파일명으로 되돌아가 찾는다. 짧은 이름이 유일할 때만 쓴다 — 여러 개면 고르지 않는다.
+    //
+    // ⚠️ 이 폴백에는 안전장치가 둘 필요하다. 처음엔 "짧은 이름이 유일하면 채택" 만 두었는데
+    //    전수 스윕에서 즉시 오답이 나왔다: URP 패키지의 Volume.cs 가 프로젝트 안의
+    //    Ami.BroAudio.Volume 으로 해석됐다(짧은 이름이 인덱스 안에서는 유일했으므로).
+    //    조용히 틀린 타입을 확신 있게 답하는 것이 이 도구에서 최악이다.
+    //      (1) 스크립트가 Assets 안에 있어야 한다 — 패키지 스크립트는 애초에 인덱스 밖이다.
+    //      (2) 후보 타입이 **어떤 소스 파일에도 매핑되지 않아야** 한다. 매핑이 있다면
+    //          그 타입은 다른 파일에서 온 것이고, 이 파일의 타입이 아니다.
+    const inAssets = /^Assets\//i.test(csPath);
+    const byStem = inAssets ? (sym.typesByShortName.get(stemOf(csPath)) || []) : [];
+    const stemInfo = byStem.length === 1 ? sym.typeByFullName.get(byStem[0]) : null;
+    if (stemInfo && (!stemInfo.sourceFiles || stemInfo.sourceFiles.length === 0)) {
+      candidates = byStem;
+      viaFilename = true;
+    } else {
+      return {
+        resolved: false, csPath,
+        reason: byStem.length > 1
+          ? `no PDB source mapping for this file and its name matches ${byStem.length} types — ambiguous`
+          : (inAssets
+            ? 'no compiled type maps to this file. Either it did not compile, its assembly was not built, ' +
+              'or the type name differs from the file name.'
+            : 'this script lives outside Assets (a package), and only user assemblies are indexed, so its ' +
+              'type cannot be resolved here. The component is still real — this is a coverage limit, not a defect in the asset.'),
+        ...(byStem.length > 1 ? { candidates: byStem.slice(0, 10) } : {}),
+      };
+    }
   }
 
   // 한 파일에 여러 타입이 있을 수 있다(보조 struct, 중첩 타입, 정적 유틸 등).
@@ -105,14 +142,17 @@ function resolveScriptType(index, guid) {
   //   2) MonoBehaviour/ScriptableObject 파생
   //   3) 그 외 첫 번째 (이 경우 확신할 수 없으므로 confidence 를 낮게 보고한다)
   const infos = candidates.map(fn => sym.typeByFullName.get(fn)).filter(Boolean);
-  const stem = csPath.slice(csPath.lastIndexOf('/') + 1).replace(/\.cs$/i, '');
+  const stem = stemOf(csPath);
 
   const byName = infos.find(t => t.name === stem);
   const unityDerived = infos.find(t =>
     t.baseType === 'UnityEngine.MonoBehaviour' || t.baseType === 'UnityEngine.ScriptableObject');
 
   const pick = byName || unityDerived || infos[0] || null;
-  const confidence = byName ? 'filename-match' : (unityDerived ? 'unity-derived' : 'ambiguous');
+  const confidence = viaFilename
+    // PDB 매핑이 없어 파일명으로 찾은 경우. 근거가 한 단계 약하므로 그렇게 말한다.
+    ? 'filename-fallback (type has no method bodies, so the PDB maps no source file to it)'
+    : (byName ? 'filename-match' : (unityDerived ? 'unity-derived' : 'ambiguous'));
 
   return {
     resolved: !!pick,
@@ -462,5 +502,363 @@ function getTypeSymbols(index, args) {
   };
 }
 
+// ---------------------------------------------------------------------------
+// Phase 2c — 컴포넌트 값 해석
+//
+// 여기까지 오면 조인의 세 축이 모두 쓰인다:
+//   YAML 값(레이어 A 원문) × m_Script.guid→.meta(레이어 A) × 컴파일된 타입/필드(레이어 B)
+// "이 프리팹에 뭐가 붙어 있고 각 필드에 뭐가 들어 있나"는 .cs 를 읽어서는 답할 수 없고,
+// YAML 만 읽어서도 답할 수 없다(GUID 는 타입명이 아니다). 둘을 이어야 나온다.
+
+// Unity 가 모든 컴포넌트에 공통으로 내는 헤더 키. 사용자 필드가 아니다.
+// 기본적으로 감춘다 — AI 가 읽을 때 신호 대 잡음이 나빠지고, 어차피 대부분 0 이다.
+const COMPONENT_NOISE_KEYS = new Set([
+  'm_ObjectHideFlags', 'm_CorrespondingSourceObject', 'm_PrefabInstance', 'm_PrefabAsset',
+  'm_GameObject', 'm_EditorHideFlags', 'm_Script', 'm_EditorClassIdentifier',
+]);
+
+const MAX_ASSET_BYTES = 32 * 1024 * 1024;
+
+/** 값 트리를 걸으며 참조를 해석해 넣는다. 원본 객체를 직접 고친다(방금 파싱한 것이라 안전하다). */
+function annotateReferences(index, node, localDocs, depth) {
+  if (!node || typeof node !== 'object' || depth > 12) return;
+
+  if (Array.isArray(node)) {
+    for (const v of node) annotateReferences(index, v, localDocs, depth + 1);
+    return;
+  }
+
+  const hasFileID = Object.prototype.hasOwnProperty.call(node, 'fileID');
+  if (hasFileID) {
+    const g = typeof node.guid === 'string' ? node.guid : null;
+    if (g) {
+      // 다른 에셋으로 나가는 참조 — GUID 를 경로로 바꾼다. 이게 조인의 값이다.
+      const p = index.guidToPath.get(g);
+      if (p) node.assetPath = p;
+      else node.assetPath = null;   // .meta 가 없다 = 프로젝트 밖이거나 사라진 에셋
+    } else {
+      // 같은 파일 안의 객체 참조 — 무엇을 가리키는지 이름을 붙인다.
+      const fid = String(node.fileID);
+      if (fid !== '0') {
+        const d = localDocs.get(fid);
+        if (d) node.localRef = d.label;
+      }
+    }
+  }
+
+  for (const k of Object.keys(node)) {
+    if (k === 'assetPath' || k === 'localRef') continue;
+    annotateReferences(index, node[k], localDocs, depth + 1);
+  }
+}
+
+/** 타입과 그 베이스 체인의 필드 이름을 모은다. 인덱스 밖에서 끊기면 complete=false. */
+function collectFieldNames(sym, info) {
+  const names = new Set();
+  let cur = info;
+  let complete = false;
+  const seen = new Set();
+
+  while (cur) {
+    for (const f of cur.fields || []) names.add(f.name);
+    if (seen.has(cur.fullName)) break;
+    seen.add(cur.fullName);
+
+    const base = cur.baseType;
+    if (!base) { complete = true; break; }
+    if (UNITY_ATTACHABLE.has(base) || NON_UNITY_ROOTS.has(base)) { complete = true; break; }
+    const next = sym.typeByFullName.get(base);
+    if (!next) break;         // 인덱스 밖 어셈블리(패키지 등)에서 끊겼다
+    cur = next;
+  }
+  return { names, complete };
+}
+
+// 심볼 인덱스에 없지만 정상인 키. UnityEngine.Object/Behaviour 가 가진 것으로, 사용자 어셈블리
+// 밖이라 필드 목록에 잡히지 않는다. 이걸 빼지 않으면 모든 컴포넌트가 m_Enabled 를 "낡은 키"로
+// 보고한다 — 삭제 판단에 쓰이는 신호에서 거짓 양성은 가장 나쁜 형태다.
+const UNITY_BASE_KEYS = new Set(['m_Enabled', 'm_Name', 'serializedVersion']);
+
+/** 직렬화된 키가 실제 타입의 필드와 맞는가. 안 맞는 키는 이름이 바뀌었거나 남은 찌꺼기다. */
+function checkFields(sym, info, values) {
+  const { names, complete } = collectFieldNames(sym, info);
+  const unknown = [];
+  let matched = 0;
+  for (const k of Object.keys(values)) {
+    if (UNITY_BASE_KEYS.has(k) || COMPONENT_NOISE_KEYS.has(k)) continue;
+    // 자동 속성은 컴파일러가 <Name>k__BackingField 로 만들고 Unity 도 그 이름으로 직렬화한다.
+    if (names.has(k)) matched++;
+    else unknown.push(k);
+  }
+  return {
+    matchedFieldCount: matched,
+    unknownKeys: unknown,
+    baseChainComplete: complete,
+    note: unknown.length === 0
+      ? 'Every serialized key maps to a field on the compiled type.'
+      : (complete
+        ? 'These serialized keys have no matching field on the type or its bases. Usually a renamed or ' +
+          'deleted field whose old value is still in the asset (Unity keeps unknown keys on load and ' +
+          'drops them on the next save). Harmless, but it means the value shown is not read by any code.'
+        : 'Base chain leaves the indexed user assemblies, so inherited fields could not all be listed. ' +
+          'unknownKeys here is inconclusive — a key may belong to a base class in a package assembly.'),
+  };
+}
+
+/** 값 객체를 응답 크기 상한에 맞춰 자른다. 자른 사실은 반드시 드러낸다. */
+function capValues(values, maxBytes) {
+  const out = {};
+  let used = 0;
+  let dropped = 0;
+  let itemsDropped = 0;
+
+  for (const k of Object.keys(values)) {
+    const v = values[k];
+    const s = JSON.stringify(v);
+    const cost = k.length + (s ? s.length : 4) + 4;
+
+    if (used + cost <= maxBytes) { out[k] = v; used += cost; continue; }
+
+    // 키 하나가 예산을 통째로 넘는 경우가 있다 — PrefabInstance 의 m_Modification 이 그렇다.
+    // 그 키를 통째로 버리면 응답에 남는 게 serializedVersion 뿐이라 아무 쓸모가 없다.
+    // 배열이면 앞에서부터 들어가는 만큼만 싣는다. 자른 개수는 반드시 함께 낸다.
+    if (Array.isArray(v)) {
+      const head = [];
+      let sub = used + k.length + 6;
+      for (const item of v) {
+        const c = JSON.stringify(item);
+        const ic = (c ? c.length : 4) + 1;
+        if (sub + ic > maxBytes) break;
+        head.push(item);
+        sub += ic;
+      }
+      if (head.length) {
+        out[k] = head;
+        used = sub;
+        itemsDropped += v.length - head.length;
+        continue;
+      }
+    }
+    dropped++;
+  }
+  return { values: out, droppedKeys: dropped, droppedItems: itemsDropped };
+}
+
+/**
+ * 에셋(프리팹/씬/에셋)의 컴포넌트를 값까지 읽는다.
+ *
+ * 인덱스 빌드에 참여하지 않는다 — 이 파일 하나만 지금 파싱한다.
+ */
+function getAssetComponents(index, args) {
+  const guid = resolveGuid(index, args.asset);
+  const relPath = guid ? index.guidToPath.get(guid) : null;
+  const asPath = relPath || String(args.asset || '').replace(/\\/g, '/').replace(/^\/+/, '');
+
+  if (!asPath) {
+    return { error: "asset is required — pass an asset path (e.g. 'Assets/X.prefab') or a 32-character GUID." };
+  }
+
+  const abs = path.join(index.root, asPath);
+  let st;
+  try { st = fs.statSync(abs); } catch {
+    return {
+      error: `'${asPath}' not found under the project root. Pass a project-relative path or a GUID. ` +
+             (guid ? '' : 'The index does not know this GUID — it may be stale (unity_index_rebuild).'),
+    };
+  }
+  if (st.size > MAX_ASSET_BYTES) {
+    return {
+      error: `'${asPath}' is ${(st.size / 1048576).toFixed(1)} MB, over the ${MAX_ASSET_BYTES / 1048576} MB limit for ` +
+             'value parsing. Assets this large are generated data (font atlases, navmesh, baked tables) rather than ' +
+             'authored components. The index-level tools (unity_find_references, unity_find_component_usages) still ' +
+             'cover this asset — only value reading is skipped.',
+    };
+  }
+
+  const t0 = Date.now();
+  let text;
+  try { text = fs.readFileSync(abs, 'utf8'); } catch (e) { return { error: `Cannot read '${asPath}': ${e.message}` }; }
+
+  if (!text.startsWith('%YAML')) {
+    return {
+      error: `'${asPath}' is not text-serialized YAML (no %YAML header). It is either a binary asset or a ` +
+             'non-Unity file; values cannot be read without the Editor.',
+    };
+  }
+
+  const parseOpts = {
+    maxDepth: args.maxDepth > 0 ? Math.min(args.maxDepth, 32) : 8,
+    maxSeqItems: args.maxArrayItems > 0 ? Math.min(args.maxArrayItems, 2000) : 200,
+  };
+
+  const { lines, docs } = yaml.splitDocuments(text);
+
+  // 1) 전 문서를 훑어 fileID -> 문서 표. GameObject 이름과 로컬 참조 해석에 쓴다.
+  const parsed = [];
+  const localDocs = new Map();
+  const typeCache = new Map();   // 스크립트 GUID -> 타입 전체 이름 (파일 안에서 재사용)
+  let unparsedTotal = 0;
+  const unparsedSamples = [];
+
+  for (const d of docs) {
+    const r = yaml.parseDocument(lines, d, parseOpts);
+    unparsedTotal += r.unparsed;
+    for (const s of r.unparsedSamples || []) if (unparsedSamples.length < 5) unparsedSamples.push(s);
+    const name = r.body && typeof r.body.m_Name === 'string' ? r.body.m_Name : '';
+    parsed.push({ doc: d, className: r.className, body: r.body || {}, name });
+
+    // 라벨은 조인 결과를 쓴다. 'MonoBehaviour' 라고만 하면 무엇을 가리키는 참조인지 알 수 없다.
+    // 같은 GUID 가 문서마다 반복되므로 파일 안에서 한 번만 해석한다.
+    let label = name ? `${r.className} '${name}'` : r.className;
+    const msg = r.body && r.body.m_Script;
+    if (msg && typeof msg === 'object' && typeof msg.guid === 'string') {
+      let tn = typeCache.get(msg.guid);
+      if (tn === undefined) {
+        const j = resolveScriptType(index, msg.guid);
+        tn = j.resolved && j.type ? j.type.fullName : null;
+        typeCache.set(msg.guid, tn);
+      }
+      if (tn) label = tn;
+    }
+
+    localDocs.set(String(d.fileID), { label, className: r.className, name, body: r.body || {} });
+  }
+
+  // 2) 컴포넌트 -> 소속 GameObject 이름
+  function ownerOf(body) {
+    const go = body && body.m_GameObject;
+    if (!go || typeof go !== 'object') return null;
+    const fid = String(go.fileID);
+    if (fid === '0') return null;
+    const d = localDocs.get(fid);
+    return { fileID: fid, name: d ? d.name : null, found: !!d };
+  }
+
+  const sym = index.symbols;
+  const wantFileID = args.fileID ? String(args.fileID) : null;
+  const wantComponent = args.component ? String(args.component).toLowerCase() : null;
+  const wantGameObject = args.gameObject ? String(args.gameObject).toLowerCase() : null;
+
+  const rows = [];
+  let gameObjectCount = 0;
+
+  for (const p of parsed) {
+    if (p.className === 'GameObject') gameObjectCount++;
+    if (args.includeGameObjects === false && p.className === 'GameObject') continue;
+
+    const owner = ownerOf(p.body);
+
+    // --- 조인: m_Script.guid -> 컴파일된 타입
+    let script = null;
+    const ms = p.body.m_Script;
+    if (ms && typeof ms === 'object' && typeof ms.guid === 'string') {
+      const join = resolveScriptType(index, ms.guid);
+      script = {
+        guid: ms.guid,
+        csPath: join.csPath || null,
+        // .meta 가 없으면 그 스크립트는 프로젝트에 없다 — 에디터의 "can not be loaded" 상태다.
+        // 단, **커버리지가 부분이면 단정할 수 없다**. Assets/Packages 만 인덱싱한 상태에서는
+        // PackageCache 안의 스크립트가 전부 "없음" 으로 보인다(실측: 그 상태의 전수 스윕에서
+        // 4,667건이 없는 스크립트로 잡혔고 실제로는 270건이었다 — 17배 과보고).
+        // 그래서 모를 때는 null 을 낸다. false 는 전체 커버리지에서만 쓴다.
+        exists: index.guidToPath.has(ms.guid) ? true
+          : (index.guidCoverage === 'full' ? false : null),
+        type: join.resolved ? join.type : null,
+        resolution: join.resolved ? join.confidence : join.reason,
+        // Unity 가 직접 적어 둔 값. 우리 조인 결과와 대조할 수 있는 독립 근거다.
+        editorClassIdentifier: typeof p.body.m_EditorClassIdentifier === 'string' && p.body.m_EditorClassIdentifier
+          ? p.body.m_EditorClassIdentifier : null,
+      };
+      // Unity 가 에셋에 적어 둔 타입명과 대조한다. 독립 근거이긴 하지만 **캐시된 힌트**라
+      // 오래될 수 있다 — 클래스 이름을 바꾸면 그 에셋을 다시 저장하기 전까지 옛 이름이 남는다.
+      // 실측(2026-08-24): 불일치 13건 중 확인한 것은 전부 이름 변경이었다
+      // (ColiderBasicAttack → ColliderBasicAttack 은 git 이력으로 확인).
+      // 그러니 불일치는 "우리 조인이 틀렸다"가 아니라 "에셋의 힌트가 낡았다"는 뜻으로 읽어야 한다.
+      const declared = script.editorClassIdentifier
+        ? script.editorClassIdentifier.split('::').pop() : '';
+      if (script.exists === null) {
+        script.existsNote =
+          'Unknown, not missing. Only Assets and Packages are indexed right now, so a script that lives in ' +
+          'Library/PackageCache looks absent here. Use unity_find_missing_scripts (it merges full GUID ' +
+          'coverage first) before treating this as a missing script.';
+      }
+      if (script.type && declared) {
+        script.matchesEditorClassIdentifier = declared === script.type.fullName;
+        if (!script.matchesEditorClassIdentifier) {
+          script.editorClassIdentifierNote =
+            'The asset still records a different type name than the one that compiles from this script file ' +
+            'today. Usually the class was renamed and this asset has not been re-saved since. The name in ' +
+            'type.fullName is what actually compiles now.';
+        }
+      }
+    }
+
+    const displayName = script && script.type ? script.type.fullName : p.className;
+
+    if (wantFileID && String(p.doc.fileID) !== wantFileID) continue;
+    if (wantComponent && !displayName.toLowerCase().includes(wantComponent)) continue;
+    if (wantGameObject) {
+      const n = (owner && owner.name) || (p.className === 'GameObject' ? p.name : '');
+      if (!n || !n.toLowerCase().includes(wantGameObject)) continue;
+    }
+
+    // --- 값
+    const values = {};
+    for (const k of Object.keys(p.body)) {
+      if (!args.includeUnityKeys && COMPONENT_NOISE_KEYS.has(k)) continue;
+      if (!args.includeUnityKeys && k === 'm_Name' && script) continue;   // MonoBehaviour 의 m_Name 은 항상 빈 값이다
+      values[k] = p.body[k];
+    }
+    annotateReferences(index, values, localDocs, 0);
+
+    const capped = capValues(values, args.maxValueBytes > 0 ? Math.min(args.maxValueBytes, 200000) : 16000);
+
+    rows.push({
+      fileID: String(p.doc.fileID),
+      classId: p.doc.classId,
+      className: p.className,
+      ...(p.doc.stripped ? { stripped: true } : {}),
+      gameObject: owner,
+      script,
+      ...(sym && script && script.type
+        ? { fieldCheck: checkFields(sym, sym.typeByFullName.get(script.type.fullName), values) }
+        : {}),
+      values: capped.values,
+      ...(capped.droppedKeys || capped.droppedItems
+        ? { valuesTruncated: true,
+            ...(capped.droppedKeys ? { droppedKeyCount: capped.droppedKeys } : {}),
+            ...(capped.droppedItems ? { droppedArrayItemCount: capped.droppedItems } : {}),
+            truncationNote: 'Raise maxValueBytes, or narrow with fileID/component, to see the rest.' }
+        : {}),
+    });
+  }
+
+  const page = pageOf(rows, args.offset, args.maxResults > 0 ? args.maxResults : 25);
+
+  return {
+    asset: asPath,
+    guid: guid || index.pathToGuid.get(asPath) || null,
+    // script.exists 를 어떻게 읽어야 하는지의 근거. 'assets' 면 false 가 아니라 null 이 나온다.
+    guidCoverage: index.guidCoverage,
+    fileSizeBytes: st.size,
+    documentCount: docs.length,
+    gameObjectCount,
+    totalCount: page.total,
+    returnedCount: page.items.length,
+    offset: page.offset,
+    nextOffset: page.nextOffset,
+    truncated: page.truncated,
+    msParse: Date.now() - t0,
+    components: page.items,
+    // 파서가 못 읽은 줄. 0 이 아니면 이 응답의 값은 불완전하다 — 세기만 하고 감추지 않는다.
+    unparsedLines: unparsedTotal,
+    ...(unparsedTotal ? { unparsedSamples } : {}),
+    note: 'Values are read from the serialized asset, not from the Editor, so this reflects what is on disk ' +
+          '(unsaved Editor state is not visible). Object references carry assetPath (cross-asset) or localRef ' +
+          '(same file) where they resolve. Unity writes booleans as 1/0.',
+  };
+}
+
 module.exports = { findReferences, findComponentUsages, findMissingScripts, getTypeSymbols,
-                   findCallers, findCallees, status, resolveGuid, resolveScriptType };
+                   findCallers, findCallees, status, resolveGuid, resolveScriptType,
+                   getAssetComponents };
