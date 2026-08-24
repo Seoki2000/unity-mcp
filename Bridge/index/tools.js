@@ -173,6 +173,11 @@ function loadCache(root) {
       scriptRefs: new Map(raw.scriptRefs.map(([g, a]) => [g, new Set(a)])),
       symbols: sym,
       stats: raw.stats,
+      // 지문을 복원해 둔다. 안 하면 캐시에서 올린 인덱스에는 fingerprint 가 없고,
+      // 그 상태로 다시 저장될 때(예: PackageCache 병합 후) fingerprint: null 이 기록된다.
+      // 다음 세션은 "지문 없는 구 캐시" 로 보고 매번 전체 재빌드를 한다 —
+      // 답은 맞지만 캐시가 조용히 죽는다. 실측(2026-08-24): 그래서 3.7초를 매번 다시 썼다.
+      fingerprint: raw.fingerprint,
       _builtAt: raw.builtAt,
     };
   } catch {
