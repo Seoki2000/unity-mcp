@@ -35,6 +35,7 @@ const YAML_EXT = new Set([
 // .meta 의 guid 는 파일 앞부분에 있다. 전체를 읽지 않고 앞 400 바이트만 본다.
 const META_HEAD_BYTES = 400;
 const META_GUID_RE = /^guid:\s*([0-9a-f]{32})\s*$/m;
+const META_EXTRA_GUID_RE = /[0-9a-f]{32}/g;
 
 // 임의 GUID 참조 / m_Script 참조.
 // m_Script 는 "이 에셋에 이 스크립트가 붙어 있다"는 조인 키다 — Unreal 의 C++↔Blueprint 경계에 해당한다.
@@ -69,6 +70,7 @@ function rel(root, p) {
 function collectFiles(roots) {
   const metas = [];
   const yamls = [];
+  const others = [];
   const seenDirs = new Set();
   const skipped = [];   // 따라갈 수 없던 링크 — 조용히 사라지지 않게 남긴다
 
@@ -106,12 +108,82 @@ function collectFiles(roots) {
       } else if (isFile) {
         if (e.name.endsWith('.meta')) metas.push(p);
         else if (YAML_EXT.has(path.extname(e.name).toLowerCase())) yamls.push(p);
+        else others.push(p);   // 확장자 목록 밖 — 텍스트면 참조 스캔 대상이다(§scanOtherFiles)
       }
     }
   }
 
   for (const r of roots) walk(r);
-  return { metas, yamls, skipped };
+  return { metas, yamls, others, skipped };
+}
+
+// 확장자 목록 밖 파일에서 참조를 찾는다.
+//
+// 왜 필요한가 — 화이트리스트는 원리적으로 불완전하다. 실측(2026-08-24, MainProject):
+// `.shadergraph` 는 텍스처를 JSON 문자열 안의 GUID 로 참조하고(`"texture":{"guid":"…"}`),
+// `.asmdef` 는 다른 어셈블리를 `"GUID:…"` 로 참조한다. 둘 다 목록 밖이라 안 보였고,
+// 그 결과 **에셋 19개가 "참조 0"** 으로 답해졌다 — 셰이더 서브그래프, 텍스처, .asmdef, .hlsl.
+// 목록에 확장자를 더 넣는 대응은 이미 두 번 실패했다(6종 → 24종 → 그래도 새 형태가 나왔다).
+//
+// 그래서 확장자로 고르지 않는다. **내용으로 고른다** — 앞 512바이트에 NUL 이 없으면 텍스트로
+// 보고 훑는다. 판정이 틀리는 방향도 안전하다: 바이너리를 텍스트로 오인하면 비용만 들고,
+// 텍스트를 놓치면 답이 틀린다. 비용이 틀리는 쪽으로 실패하게 둔다.
+//
+// 실측 비용: 1,508개 스니핑 357 ms, 그중 텍스트 816개 8.7 MB (바이너리 692개 945 MB 는 안 읽는다).
+const SNIFF_BYTES = 512;
+const MAX_TEXT_BYTES = 16 * 1024 * 1024;
+
+function scanOtherFiles(root, files, meta, refs, weak) {
+  const t0 = Date.now();
+  let sniffed = 0, textFiles = 0, binaryFiles = 0, largeFiles = 0, bytes = 0, edges = 0;
+  const buf = Buffer.allocUnsafe(SNIFF_BYTES);
+
+  for (const f of files) {
+    let st;
+    try { st = fs.statSync(f); } catch { continue; }
+    if (st.size > MAX_TEXT_BYTES) { largeFiles++; continue; }
+
+    let n = 0;
+    try {
+      const fd = fs.openSync(f, 'r');
+      n = fs.readSync(fd, buf, 0, SNIFF_BYTES, 0);
+      fs.closeSync(fd);
+    } catch { continue; }
+    sniffed++;
+
+    let isBinary = false;
+    for (let i = 0; i < n; i++) if (buf[i] === 0) { isBinary = true; break; }
+    if (isBinary) { binaryFiles++; continue; }
+
+    let text;
+    try { text = fs.readFileSync(f, 'latin1'); } catch { continue; }
+    textFiles++;
+    bytes += text.length;
+
+    const assetPath = rel(root, f);
+    const ownGuid = meta.pathToGuid.get(assetPath);
+    GUID_SCAN_RE.lastIndex = 0;
+    let m;
+    while ((m = GUID_SCAN_RE.exec(text)) !== null) {
+      const g = m[1] !== undefined ? m[1] : m[2];
+      if (g === ownGuid) continue;
+      // 여기서는 두 형태 모두 실제 .meta GUID 인 것만 인정한다. 이 파일들은 Unity 직렬화가
+      // 아니라 임의 텍스트라(소스코드·문서 포함) 형태만으로는 참조인지 알 수 없다.
+      if (!meta.guidToPath.has(g)) continue;
+      let set = refs.get(g);
+      if (!set) refs.set(g, set = new Set());
+      if (!set.has(assetPath)) { set.add(assetPath); edges++; }
+      // 여기서 나온 엣지는 **직렬화 구조가 아니라 텍스트 일치**다. 소스코드·문서·그래프
+      // JSON 어디든 32자리 hex 가 있으면 잡힌다. 대부분 진짜 참조지만(셰이더그래프의
+      // 텍스처, asmdef 의 의존), 원리적으로는 GUID 를 그냥 적어둔 문자열일 수도 있다.
+      // 그래서 세기만 하지 않고 **어느 엣지가 그런 것인지** 남겨 응답에서 구분한다.
+      let w = weak.get(g);
+      if (!w) weak.set(g, w = new Set());
+      w.add(assetPath);
+    }
+  }
+
+  return { sniffed, textFiles, binaryFiles, largeFiles, bytes, edges, ms: Date.now() - t0 };
 }
 
 /**
@@ -120,30 +192,53 @@ function collectFiles(roots) {
  * 스코프 주의: Phase 1.5 실측으로 Assets 만 211 ms, Library/PackageCache 를 포함하면
  * 9,614 ms (45배)였다. 호출자가 스코프를 정한다.
  */
-function buildMetaIndex(root, metaFiles) {
+function buildMetaIndex(root, metaFiles, opts = {}) {
   const guidToPath = new Map();
   const pathToGuid = new Map();
+  // 참조를 담고 있는 .meta 의 본문. 아래 §buildIndex 에서 엣지로 바꾼다.
+  const withRefs = [];
+  const collectRefs = opts.collectRefs !== false;
 
   for (const m of metaFiles) {
-    let head;
+    let text;
     try {
-      const fd = fs.openSync(m, 'r');
-      const buf = Buffer.allocUnsafe(META_HEAD_BYTES);
-      const n = fs.readSync(fd, buf, 0, META_HEAD_BYTES, 0);
-      fs.closeSync(fd);
-      head = buf.slice(0, n).toString('latin1');
+      if (!collectRefs) {
+        // 자기 guid 만 필요할 때는 앞부분만 읽는다(PackageCache 2만 개를 훑는 경로).
+        const fd = fs.openSync(m, 'r');
+        const buf = Buffer.allocUnsafe(META_HEAD_BYTES);
+        const n = fs.readSync(fd, buf, 0, META_HEAD_BYTES, 0);
+        fs.closeSync(fd);
+        text = buf.slice(0, n).toString('latin1');
+      } else {
+        // 전체를 읽는다. 실측(MainProject): .meta 3,142개 합계 3.5 MB / 314 ms.
+        text = fs.readFileSync(m, 'latin1');
+      }
     } catch { continue; }
 
-    const match = META_GUID_RE.exec(head);
+    const match = META_GUID_RE.exec(text);
     if (!match) continue;
 
     // "Foo.prefab.meta" -> "Foo.prefab"
     const assetPath = rel(root, m.slice(0, -'.meta'.length));
     guidToPath.set(match[1], assetPath);
     pathToGuid.set(assetPath, match[1]);
+
+    // ⚠️ .meta 도 다른 에셋을 참조한다 — 인덱스는 오랫동안 이걸 출처로 보지 않았다.
+    // 실측(2026-08-24, MainProject): FBX 임포터의 externalObjects 가 머티리얼을
+    // `second: {fileID: 2100000, guid: …}` 로 물고 있고, 아바타 소스/스프라이트도 같다.
+    // 참조 130건 / 대상 41개이며, 그중 **18개는 다른 어디에서도 참조되지 않아**
+    // unity_find_references 가 "참조 0" 을 답하고 있었다(모델에 물린 머티리얼들).
+    // 지우면 임포트한 모델의 머티리얼 할당이 깨진다.
+    if (collectRefs) {
+      // 자기 guid 말고 다른 32자리 hex 가 또 있는지만 싸게 본다.
+      META_EXTRA_GUID_RE.lastIndex = 0;
+      let count = 0;
+      while (META_EXTRA_GUID_RE.exec(text) !== null) { if (++count > 1) break; }
+      if (count > 1) withRefs.push({ assetPath, ownGuid: match[1], text });
+    }
   }
 
-  return { guidToPath, pathToGuid };
+  return { guidToPath, pathToGuid, withRefs };
 }
 
 /**
@@ -152,7 +247,9 @@ function buildMetaIndex(root, metaFiles) {
  * refs:       참조된 GUID -> 그 GUID 를 참조하는 에셋 경로 집합
  * scriptRefs: 스크립트 GUID -> 그 스크립트가 붙은 에셋 경로 집합
  */
-function buildYamlIndex(root, yamlFiles, knownGuids) {
+function buildYamlIndex(root, yamlFiles, meta) {
+  const knownGuids = meta && meta.guidToPath ? meta.guidToPath : null;
+  const pathToGuid = meta && meta.pathToGuid ? meta.pathToGuid : null;
   const refs = new Map();
   const scriptRefs = new Map();
   let bytesParsed = 0;
@@ -167,6 +264,11 @@ function buildYamlIndex(root, yamlFiles, knownGuids) {
     bytesParsed += text.length;
 
     const assetPath = rel(root, y);
+    // 에셋이 **자기 GUID** 를 본문에 적어두는 경우가 있다(BroAudio 의 _assetGUID,
+    // TMP 폰트 에셋 등). 그걸 참조 엣지로 세면 "이 에셋을 참조하는 것 1건" 이 되어
+    // 아무도 안 쓰는 에셋이 쓰이는 것처럼 보인다 — 자기 자신은 참조가 아니다.
+    // 실측(2026-08-24): 맨 GUID 스캔을 넣자 이런 자기 참조가 4건 생겼다.
+    const ownGuid = pathToGuid ? pathToGuid.get(assetPath) : null;
 
     // 이 파일 안에서 어떤 형태로 봤는지. `guid:` 로도 나온 GUID 는 맨 형태로 또 나와도
     // 새로 얻은 것이 아니다 — 그걸 구분해야 "맨 형태 덕분에 늘어난 엣지" 수가 정직해진다.
@@ -177,9 +279,11 @@ function buildYamlIndex(root, yamlFiles, knownGuids) {
     GUID_SCAN_RE.lastIndex = 0;
     while ((m = GUID_SCAN_RE.exec(text)) !== null) {
       let g = m[1];
+      if (g !== undefined && g === ownGuid) continue;   // 자기 자신
       if (g === undefined) {
         // `guid:` 접두가 없는 형태 — 실제 에셋 GUID 인 것만 인정한다(위 주석 참조).
         g = m[2];
+        if (g === ownGuid) continue;                    // 자기 자신
         if (!knownGuids || !knownGuids.has(g)) continue;
         if (!prefixed.has(g)) bareOnly.add(g);
       } else {
@@ -224,7 +328,7 @@ function foldFile(mtimeMs, size) {
   return x;
 }
 
-function fingerprintFrom(metaFiles, yamlFiles) {
+function fingerprintFrom(metaFiles, yamlFiles, otherFiles) {
   let maxMtimeMs = 0;
   let totalBytes = 0;
   let counted = 0;
@@ -232,7 +336,9 @@ function fingerprintFrom(metaFiles, yamlFiles) {
   // mtime 을 바꿔도 max 는 그대로여서 감지되지 않았다. 파일별 해시를 합산해야 어느 파일이
   // 어느 방향으로 바뀌어도 지문이 달라진다.
   let hash = 0;
-  for (const list of [metaFiles, yamlFiles]) {
+  // otherFiles 를 빼면 .shadergraph/.asmdef 가 바뀌어도 캐시가 낡은 줄 모른다 —
+  // 이제 그 파일들도 참조 출처이므로 지문에 들어가야 한다.
+  for (const list of [metaFiles, yamlFiles, otherFiles || []]) {
     for (const f of list) {
       try {
         const st = fs.statSync(f);
@@ -246,6 +352,7 @@ function fingerprintFrom(metaFiles, yamlFiles) {
   return {
     metaFiles: metaFiles.length,
     yamlFiles: yamlFiles.length,
+    otherFiles: otherFiles ? otherFiles.length : 0,
     counted,
     maxMtimeMs: Math.round(maxMtimeMs),
     totalBytes,
@@ -260,7 +367,7 @@ function fingerprint(root, opts = {}) {
   if (opts.includePackageCache) metaRoots.push(path.join(root, 'Library', 'PackageCache'));
   const assetFiles = collectFiles(assetRoots);
   const metaFiles = collectFiles(metaRoots);
-  return fingerprintFrom(metaFiles.metas, assetFiles.yamls);
+  return fingerprintFrom(metaFiles.metas, assetFiles.yamls, assetFiles.others);
 }
 
 function buildIndex(root, opts = {}) {
@@ -282,8 +389,28 @@ function buildIndex(root, opts = {}) {
   const tMeta = Date.now();
 
   // .meta 인덱스를 먼저 만들고 그 GUID 집합을 넘긴다 — 맨 GUID 토큰을 걸러낼 기준이 된다.
-  const yaml = buildYamlIndex(root, assetFiles.yamls, new Set(meta.guidToPath.keys()));
+  const yaml = buildYamlIndex(root, assetFiles.yamls, meta);
   const tYaml = Date.now();
+
+  // .meta 안의 참조를 엣지로 바꾼다. 출처는 .meta 가 아니라 **그 .meta 가 설명하는 에셋**이다
+  // ("Boss_23_base.mat 을 SK_23.fbx 가 참조한다" 가 읽는 쪽에 맞는 문장이다).
+  let metaEdges = 0;
+  for (const mr of meta.withRefs) {
+    GUID_SCAN_RE.lastIndex = 0;
+    let mm;
+    while ((mm = GUID_SCAN_RE.exec(mr.text)) !== null) {
+      const g = mm[1] !== undefined ? mm[1] : mm[2];
+      if (g === mr.ownGuid) continue;                 // 자기 자신
+      if (!meta.guidToPath.has(g)) continue;          // 프로젝트 밖/내장 — 경로로 못 바꾼다
+      let set = yaml.refs.get(g);
+      if (!set) yaml.refs.set(g, set = new Set());
+      if (!set.has(mr.assetPath)) { set.add(mr.assetPath); metaEdges++; }
+    }
+  }
+
+  // 확장자 목록 밖 텍스트 파일(.shadergraph/.asmdef/.cs 등)에서도 참조를 찾는다.
+  const weakRefs = new Map();
+  const other = scanOtherFiles(root, assetFiles.others, meta, yaml.refs, weakRefs);
 
   let edges = 0;
   for (const s of yaml.refs.values()) edges += s.size;
@@ -297,10 +424,12 @@ function buildIndex(root, opts = {}) {
     // 질의가 0 을 답할 때 "안 본 확장자였나" 를 판단할 근거.
     yamlExtensions: [...YAML_EXT].sort(),
     // 캐시 유효성 검사용. 여기서 계산해 두면 저장 시 다시 훑지 않는다.
-    fingerprint: fingerprintFrom(metaFiles.metas, assetFiles.yamls),
+    fingerprint: fingerprintFrom(metaFiles.metas, assetFiles.yamls, assetFiles.others),
     guidToPath: meta.guidToPath,
     pathToGuid: meta.pathToGuid,
     refs: yaml.refs,
+    // 텍스트 일치로만 얻은 엣지(직렬화 구조가 아님). 응답에서 구분해 싣는다.
+    weakRefs,
     scriptRefs: yaml.scriptRefs,
     stats: {
       metaFiles: metaFiles.metas.length,
@@ -311,6 +440,15 @@ function buildIndex(root, opts = {}) {
       scriptGuids: yaml.scriptRefs.size,
       // `guid:` 접두 없이 발견한 참조 엣지 수(JSON 내장, m_SourceFontFileGUID 등).
       bareGuidEdges: yaml.bareEdges,
+      // .meta(임포터 설정)에서만 나온 참조 엣지 수. FBX 의 externalObjects 등.
+      metaRefEdges: metaEdges,
+      metaFilesWithRefs: meta.withRefs.length,
+      // 확장자 목록 밖 텍스트 파일에서 얻은 엣지와 그 비용.
+      otherTextFiles: other.textFiles,
+      otherBinarySkipped: other.binaryFiles,
+      otherLargeSkipped: other.largeFiles,
+      otherRefEdges: other.edges,
+      msOther: other.ms,
       bytesParsed: yaml.bytesParsed,
       filesFailed: yaml.filesFailed,
       msCollect: tCollect - t0,
@@ -339,7 +477,7 @@ function mergePackageCacheGuids(index) {
   const t0 = Date.now();
   const pcRoot = path.join(index.root, 'Library', 'PackageCache');
   const files = collectFiles([pcRoot]);
-  const extra = buildMetaIndex(index.root, files.metas);
+  const extra = buildMetaIndex(index.root, files.metas, { collectRefs: false });
 
   let added = 0;
   for (const [g, p] of extra.guidToPath) {

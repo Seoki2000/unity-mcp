@@ -70,7 +70,10 @@ function cachePath(root) {
 // 4: YAML_EXT 확장 (2026-08-23). 구 캐시는 6종만 훑은 것이라 참조 커버리지가 부족하다.
 //    버전을 올려 자동으로 폐기시킨다 — 안 올리면 수정이 재빌드 전까지 안 먹는다.
 // 5: 캐시 지문 추가 (2026-08-23). 이전 캐시에는 fingerprint 가 없어 유효성 검사가 불가능하다.
-const CACHE_VERSION = 5;
+// 6: 참조 엣지 규칙 변경 (2026-08-24) — 맨 GUID 참조, .meta 참조, 자기 참조 제외.
+//    지문은 **디스크 상태**만 보므로 코드가 바뀐 것은 못 잡는다. 버전을 안 올리면
+//    기존 캐시가 옛 엣지(6,021)를 계속 서빙하고, 고친 오답이 그대로 남는다.
+const CACHE_VERSION = 6;
 
 function saveCache(index) {
   try {
@@ -86,6 +89,7 @@ function saveCache(index) {
       guidToPath: [...index.guidToPath],
       refs: [...index.refs].map(([g, s]) => [g, [...s]]),
       scriptRefs: [...index.scriptRefs].map(([g, s]) => [g, [...s]]),
+      weakRefs: index.weakRefs ? [...index.weakRefs].map(([g, s]) => [g, [...s]]) : [],
       callGraph: index.callGraph ? {
         stats: index.callGraph.stats,
         callsFrom: [...index.callGraph.callsFrom].map(([k, v]) => [k, [...v]]),
@@ -171,6 +175,7 @@ function loadCache(root) {
       pathToGuid,
       refs: new Map(raw.refs.map(([g, a]) => [g, new Set(a)])),
       scriptRefs: new Map(raw.scriptRefs.map(([g, a]) => [g, new Set(a)])),
+      weakRefs: new Map((raw.weakRefs || []).map(([g, a]) => [g, new Set(a)])),
       symbols: sym,
       stats: raw.stats,
       // 지문을 복원해 둔다. 안 하면 캐시에서 올린 인덱스에는 fingerprint 가 없고,
@@ -295,7 +300,7 @@ function toolDefinitions() {
     },
     {
       name: 'unity_find_references',
-      description: 'Find assets that reference the given asset, by GUID reverse-index over text-serialized Unity assets. Accepts an asset path or a 32-char GUID. O(1) lookup instead of scanning every asset with GetDependencies. Scope: only the file types in scannedExtensions, reported when the result is 0. No single source is complete — this index misses asset types outside that list, while Unity own GetDependencies misses VFX Graph internal references (measured). Cross-check both before deciding an asset is unused.',
+      description: 'Find assets that reference the given asset, by GUID reverse-index. Accepts an asset path or a 32-char GUID. O(1) lookup instead of scanning every asset with GetDependencies. Scope: every text file under Assets — serialized assets, .meta importer settings, shader graphs, asmdefs, source. Binary files and run-time path lookups (Resources.Load, Addressables addresses) are invisible to it, and Unity own GetDependencies misses VFX Graph internal references (measured), so a zero from either side is unproven rather than proof of no reference. A zero result carries what was scanned.',
       inputSchema: {
         type: 'object',
         properties: {
