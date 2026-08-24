@@ -359,6 +359,11 @@ function parseBlock(lines, start, end, opts) {
 
       if (arr.length >= o.maxSeqItems) { ctx.truncated = true; continue; }
 
+      // 중첩 시퀀스(`- - a`)는 이 파서가 다루지 않는 형태다. MainProject 의 텍스트 에셋
+      // 1,144개에는 한 건도 없지만, 없다고 단정하지 말고 만나면 드러내야 한다 —
+      // 조용히 문자열 "- a" 로 만들면 그게 배열이었다는 사실이 사라진다.
+      if (itemLines.length && /^\s*-(\s|$)/.test(itemLines[0])) noteUnparsed(itemLines[0]);
+
       // 항목이 `key: ...` 로 시작하면 매핑, 아니면 스칼라/플로우.
       const isMapping = itemLines.length > 1 || /^\s*[^:{[]+:(\s|$)/.test(itemLines[0] || '');
       if (!itemLines.length) { arr.push(null); continue; }
