@@ -39,6 +39,22 @@ const META_GUID_RE = /^guid:\s*([0-9a-f]{32})\s*$/m;
 // 임의 GUID 참조 / m_Script 참조.
 // m_Script 는 "이 에셋에 이 스크립트가 붙어 있다"는 조인 키다 — Unreal 의 C++↔Blueprint 경계에 해당한다.
 const ANY_GUID_RE = /guid:\s*([0-9a-f]{32})/g;
+// `guid: <32hex>` 가 아닌 형태로 에셋을 가리키는 참조.
+// 실측(2026-08-24, MainProject): VFX Graph 는 오브젝트 참조를 **YAML 문자열 안의 JSON** 으로 쓴다.
+//     m_SerializableObject: '{"obj":{"fileID":2800000,"guid":"502f39c6...","type":3}}'
+// TMP 폰트 에셋은 원본 폰트를 `m_SourceFontFileGUID: <32hex>` 로 가리키고,
+// Addressables 는 그룹 항목을 `m_GUID: <32hex>` 로 가리킨다.
+// 위 정규식은 셋 다 못 본다. 그 결과 실제로 참조되는 에셋 3건이 참조 0 으로 나왔다
+// (그중 하나는 자기 SDF 에셋이 쓰는 NotoSansKR .ttf — "안 쓰이니 지워도 된다" 로 읽히는 답이다).
+//
+// 형태를 하나씩 추가하는 방식은 이전에 확장자 화이트리스트에서 이미 실패했다.
+// 그래서 형태를 세지 않는다 — **32자리 hex 토큰 중 실제 .meta GUID 인 것**만 참조로 친다.
+// 우연히 일치할 확률은 128비트 난수라 0 이고, 아닌 것(믹서 이펙트 ID, 서명 해시 등)은
+// .meta 에 없으므로 저절로 걸러진다.
+//
+// 두 형태를 한 정규식으로 합쳐 **한 번만** 훑는다. 따로 훑으면 181 MB 를 두 번 읽는다
+// (실측: 분리 515+2,000 ms → 합치면 1,957 ms).
+const GUID_SCAN_RE = /guid:\s*([0-9a-f]{32})|([0-9a-f]{32})/g;
 const SCRIPT_BLOCK_RE = /m_Script:\s*\{fileID:\s*(\d+),\s*guid:\s*([0-9a-f]{32})[^}]*\}/g;
 
 /** 프로젝트 루트 기준 슬래시 경로로 정규화한다. */
@@ -136,11 +152,12 @@ function buildMetaIndex(root, metaFiles) {
  * refs:       참조된 GUID -> 그 GUID 를 참조하는 에셋 경로 집합
  * scriptRefs: 스크립트 GUID -> 그 스크립트가 붙은 에셋 경로 집합
  */
-function buildYamlIndex(root, yamlFiles) {
+function buildYamlIndex(root, yamlFiles, knownGuids) {
   const refs = new Map();
   const scriptRefs = new Map();
   let bytesParsed = 0;
   let filesFailed = 0;
+  let bareEdges = 0;
 
   for (const y of yamlFiles) {
     let text;
@@ -151,13 +168,29 @@ function buildYamlIndex(root, yamlFiles) {
 
     const assetPath = rel(root, y);
 
+    // 이 파일 안에서 어떤 형태로 봤는지. `guid:` 로도 나온 GUID 는 맨 형태로 또 나와도
+    // 새로 얻은 것이 아니다 — 그걸 구분해야 "맨 형태 덕분에 늘어난 엣지" 수가 정직해진다.
+    const prefixed = new Set();
+    const bareOnly = new Set();
+
     let m;
-    ANY_GUID_RE.lastIndex = 0;
-    while ((m = ANY_GUID_RE.exec(text)) !== null) {
-      let set = refs.get(m[1]);
-      if (!set) refs.set(m[1], set = new Set());
+    GUID_SCAN_RE.lastIndex = 0;
+    while ((m = GUID_SCAN_RE.exec(text)) !== null) {
+      let g = m[1];
+      if (g === undefined) {
+        // `guid:` 접두가 없는 형태 — 실제 에셋 GUID 인 것만 인정한다(위 주석 참조).
+        g = m[2];
+        if (!knownGuids || !knownGuids.has(g)) continue;
+        if (!prefixed.has(g)) bareOnly.add(g);
+      } else {
+        prefixed.add(g);
+        bareOnly.delete(g);
+      }
+      let set = refs.get(g);
+      if (!set) refs.set(g, set = new Set());
       set.add(assetPath);
     }
+    bareEdges += bareOnly.size;
 
     SCRIPT_BLOCK_RE.lastIndex = 0;
     while ((m = SCRIPT_BLOCK_RE.exec(text)) !== null) {
@@ -169,7 +202,7 @@ function buildYamlIndex(root, yamlFiles) {
     }
   }
 
-  return { refs, scriptRefs, bytesParsed, filesFailed };
+  return { refs, scriptRefs, bytesParsed, filesFailed, bareEdges };
 }
 
 /**
@@ -248,7 +281,8 @@ function buildIndex(root, opts = {}) {
   const meta = buildMetaIndex(root, metaFiles.metas);
   const tMeta = Date.now();
 
-  const yaml = buildYamlIndex(root, assetFiles.yamls);
+  // .meta 인덱스를 먼저 만들고 그 GUID 집합을 넘긴다 — 맨 GUID 토큰을 걸러낼 기준이 된다.
+  const yaml = buildYamlIndex(root, assetFiles.yamls, new Set(meta.guidToPath.keys()));
   const tYaml = Date.now();
 
   let edges = 0;
@@ -275,6 +309,8 @@ function buildIndex(root, opts = {}) {
       referencedGuids: yaml.refs.size,
       referenceEdges: edges,
       scriptGuids: yaml.scriptRefs.size,
+      // `guid:` 접두 없이 발견한 참조 엣지 수(JSON 내장, m_SourceFontFileGUID 등).
+      bareGuidEdges: yaml.bareEdges,
       bytesParsed: yaml.bytesParsed,
       filesFailed: yaml.filesFailed,
       msCollect: tCollect - t0,
@@ -322,6 +358,6 @@ function mergePackageCacheGuids(index) {
 }
 
 module.exports = {
-  buildIndex, collectFiles, buildMetaIndex, mergePackageCacheGuids,
+  buildIndex, collectFiles, buildMetaIndex, buildYamlIndex, mergePackageCacheGuids,
   fingerprint, fingerprintFrom, YAML_EXT, rel,
 };
