@@ -148,7 +148,15 @@ function readMethodAttributes(md) {
         name = ns ? `${ns}.${nm}` : nm;
       }
     }
-    if (!name || NOISE_ATTRIBUTE_RE.test(name)) continue;
+    // `[Conditional]` 은 Diagnostics 소음 필터에 걸리지만 예외로 남긴다.
+    // 이 속성이 붙은 메서드의 **호출은 해당 심볼이 없는 빌드에서 컴파일 단계에 사라진다.**
+    // 실측(2026-08-26, 독립 감사에서 지적): `Edit.cs` 는 `[Conditional("UNITY_EDITOR")]`
+    // 로그 래퍼인데 호출자 지표에서 프로젝트 1위(파일 단위 유입 49개)로 나온다.
+    // 즉 중심성 최상위가 빌드에는 호출이 남지 않는 타입이다. 그 사실을 설명할 증거를
+    // 필터가 버리고 있었다 — 이름만이라도 남겨야 응답이 그걸 말할 수 있다.
+    // (속성 인자 — 어느 심볼인지 — 는 아직 디코딩하지 않는다. 블롭 파싱은 별건이다.)
+    const keepAnyway = name === 'System.Diagnostics.ConditionalAttribute';
+    if (!name || (!keepAnyway && NOISE_ATTRIBUTE_RE.test(name))) continue;
 
     let list = byMethodRow.get(methodRow);
     if (!list) byMethodRow.set(methodRow, list = []);

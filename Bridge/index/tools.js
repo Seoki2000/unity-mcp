@@ -16,6 +16,7 @@ const symbols = require('./symbols');
 const callgraph = require('./callgraph');
 const wiring = require('./wiring');
 const queries = require('./queries');
+const projectmap = require('./projectmap');
 
 const PREFIX = 'unity_index_';   // 상태/재빌드 도구
 const LOCAL_TOOL_NAMES = new Set([
@@ -28,6 +29,7 @@ const LOCAL_TOOL_NAMES = new Set([
   'unity_find_callers',
   'unity_find_callees',
   'unity_get_asset_components',
+  'unity_project_map',
 ]);
 
 let _index = null;
@@ -77,7 +79,8 @@ function cachePath(root) {
 // 7: 레이어 D 추가 — 인스펙터 배선 + 타입 이름 문자열 참조.
 //    캐시에 없으면 캐시로 뜬 세션에서 통째로 사라진다.
 // 8: 메서드 속성(CustomAttribute) 수집. 구 캐시에는 없어 진입점이 안 보인다.
-const CACHE_VERSION = 8;
+// 9: `[Conditional]` 속성 수집(구 캐시에는 없어 조건부 컴파일 증거가 통째로 빠진다).
+const CACHE_VERSION = 9;
 
 function saveCache(index) {
   try {
@@ -230,7 +233,7 @@ function loadCache(root) {
 }
 
 let _log = () => {};
-function setLogger(fn) { _log = fn; }
+function setLogger(fn) { _log = fn; projectmap.setLogger(msg => _log(`[index] ${msg}`)); }
 function log(msg) { _log(`[index] ${msg}`); }
 
 /**
@@ -449,6 +452,20 @@ function toolDefinitions() {
       inputSchema: { type: 'object', properties: { ...paging }, required: [] },
       annotations: ro,
     },
+    {
+      name: 'unity_project_map',
+      description: 'Orientation for an unfamiliar project, within a token budget: which scenes and prefabs each script type is actually placed in, types that no code calls but assets attach (dead to a call graph, alive at run time), entry points from method attributes and Inspector wiring, and source areas ranked by how much of the project data attaches to them. Reads the same index as the other local tools, so no Unity round-trip. Ordering components (attachment, git churn, caller count) ship with every entry, and the response carries the measured hit rate — the map is orientation, not a substitute for search.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          budgetTokens: { type: 'integer', description: 'Approximate token budget for the response (default 6000, min 800, max 20000). Measured: 4000 answers 5 of 7 structural probes, 6000 answers 6, 8000 answers all 7' },
+          scope: { type: 'string', description: "Restrict to a source folder prefix (e.g. 'Assets/1.Scripts'); types with no source mapping drop out" },
+          include: { type: 'string', description: 'Comma-separated sections: placement, dataOnly, entryPoints, areas, ranked. Default all' },
+        },
+        required: [],
+      },
+      annotations: ro,
+    },
   ];
 }
 
@@ -486,6 +503,7 @@ function callLocalTool(name, args, port) {
   else if (name === 'unity_find_callers') result = queries.findCallers(idx, a);
   else if (name === 'unity_find_callees') result = queries.findCallees(idx, a);
   else if (name === 'unity_get_asset_components') result = queries.getAssetComponents(idx, a);
+  else if (name === 'unity_project_map') result = projectmap.buildProjectMap(idx, a);
   else if (name === 'unity_find_missing_scripts') {
     // Missing Script 판정에는 전체 GUID 커버리지가 필수다.
     // Assets/Packages 만으로 판정하면 패키지 스크립트가 전부 'missing' 으로 잡힌다
