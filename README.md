@@ -7,13 +7,13 @@
 *Read this in other languages: [한국어](README_ko.md)*
 A **Model Context Protocol (MCP)** server for Unity that enables AI agents to **query and control** the Unity Editor. This local-optimized version is enhanced with additional tools for Behavior Trees, Window Management, and advanced GameObject/Hierarchy manipulation.
 
-## Fork dev build — dev-0.0.4
+## Fork dev build — dev-0.0.5
 
 This fork (`Seoki2000/unity-mcp`, branch `optimized`) diverges from upstream. Numbers below
 are measured against a live Unity editor, not estimated. Full record in Korean:
 [README_ko.md](README_ko.md#포크-개발-버전--dev-001).
 
-Package version: `2.3.0-dev.0.0.4` · baseline commit: `5331a34`
+Package version: `2.3.0-dev.0.0.5` · baseline commit: `5331a34`
 
 **Added since the previously pinned `2ea969e`:** path-escape guard and session-token auth;
 tool annotations, pagination and response caps; an out-of-process project index (reverse
@@ -123,6 +123,35 @@ query. An acceptance probe ships with it — `node Tools/probe-project-map.js` r
 whose answers are independently known from disk: 5/7 at a 4,000-token budget, 6/7 at the 6,000
 default, 7/7 at 8,000. That probe is what caught the type-name axis being missing from the map
 entirely; two rounds of reading the code had not.
+
+**dev-0.0.5 — impact analysis (`unity_impact_analysis`).** "What breaks if I change, rename or
+delete this?" for a type, a `Type::Method`, or an asset — answered across nine axes that are kept
+*separate*: IL callers, subclasses (full closure), assets whose components use the type, assets
+referencing the asset, UnityEvent Inspector wirings, assembly-qualified type-name strings,
+const-path loads from code, `ProjectSettings` and build-scene membership, and attribute entry
+points. No total is computed, because the axes fail differently: the compiler catches a code
+caller, an Inspector wiring breaks silently, and a type-name string breaks with no diagnostic at
+all. `unknown` ships in every response — 44 unresolved dynamic load sites, no implements-list for
+53 interfaces, 1,864 edges leaving the index, 681 unread binaries, merged overloads, 123 colliding
+nested type names, and disk-only state — because zero on every axis is not proof. Transitive depth
+is explicit (`depth`, default 1; measured caller fan-out on a 120-method sample: level 1 median 1 /
+p90 3 / max 59, level 2 median 1 / p90 5 / max 76). Cost: `tools/list` 40,905 -> 42,142 B, warm
+query 0-6 ms.
+
+The acceptance probe was written **before** the implementation this time
+(`node Tools/probe-impact-analysis.js`, 10 questions with answers verified independently on disk;
+10/10 on the first run). It still missed three defects that a manual edge-case sweep caught: a
+non-existent asset was answered with "impact 0" instead of an error, an ambiguous type name was
+resolved silently to one of several, and transitive callers were absent from the summary while
+present in the body. Probes cover the questions you thought of.
+
+Two defects were fixed alongside. `ProjectSettings` was outside the scan roots even though its
+`.asset` files reference Assets GUIDs, so `unity_find_references` reported one referencing asset for
+`0.BootStrapScene.unity` — build scene index 0 — while omitting the build settings that reference
+it (edges 6,267 -> 6,305 across 27 newly scanned files). And the index cache lost 123 duplicate
+type names on every round trip, which made every short name look unique in a cache-loaded session;
+that defect had been deferred the previous day as having no path to a wrong answer, and a second
+consumer gave it one within a day.
 
 **Known limits:** references assembled at run time (`Resources.Load(dir + name)`, Addressables
 addresses) stay invisible — 44 such call sites here, and a zero result reports that count; no
