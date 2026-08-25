@@ -17,6 +17,7 @@ const callgraph = require('./callgraph');
 const wiring = require('./wiring');
 const queries = require('./queries');
 const projectmap = require('./projectmap');
+const impact = require('./impact');
 
 const PREFIX = 'unity_index_';   // 상태/재빌드 도구
 const LOCAL_TOOL_NAMES = new Set([
@@ -30,6 +31,7 @@ const LOCAL_TOOL_NAMES = new Set([
   'unity_find_callees',
   'unity_get_asset_components',
   'unity_project_map',
+  'unity_impact_analysis',
 ]);
 
 let _index = null;
@@ -80,7 +82,10 @@ function cachePath(root) {
 //    캐시에 없으면 캐시로 뜬 세션에서 통째로 사라진다.
 // 8: 메서드 속성(CustomAttribute) 수집. 구 캐시에는 없어 진입점이 안 보인다.
 // 9: `[Conditional]` 속성 수집(구 캐시에는 없어 조건부 컴파일 증거가 통째로 빠진다).
-const CACHE_VERSION = 9;
+// 10: ProjectSettings 를 참조 출처로 스캔(빌드 씬 등 18개 에셋의 참조가 빠져 있었다).
+// 11: 전체 이름이 겹쳐 밀린 타입 123개를 캐시에 보존. 이걸 잃으면 짧은 이름이 전부 유일해 보여
+//     유일성에 기대는 두 곳이 조용히 하나를 골라 답한다(캐시로 뜬 세션에서만 다르게 동작했다).
+const CACHE_VERSION = 11;
 
 function saveCache(index) {
   try {
@@ -114,6 +119,8 @@ function saveCache(index) {
         stats: index.symbols.stats,
         assemblies: index.symbols.assemblies,
         types: [...index.symbols.typeByFullName.values()],
+        // 전체 이름 충돌로 밀린 것들. 신선 빌드와 캐시 로드가 **같은 맵**을 갖게 하려면 필요하다.
+        duplicateTypes: index.symbols.duplicateTypes || [],
       } : null,
     };
     fs.mkdirSync(path.dirname(cachePath(index.root)), { recursive: true });
@@ -163,7 +170,15 @@ function loadCache(root) {
           if (!l.includes(t.fullName)) l.push(t.fullName);
         }
       }
-      sym = { typeByFullName, typesByShortName, typesBySourceFile,
+      // 밀린 중복도 짧은 이름 맵에는 넣는다 — 빌드 경로와 같은 상태여야 한다.
+      // typeByFullName 은 건드리지 않는다(빌드도 첫 것만 담는다).
+      const dups = Array.isArray(raw.symbols.duplicateTypes) ? raw.symbols.duplicateTypes : [];
+      for (const t of dups) {
+        let sl = typesByShortName.get(t.name);
+        if (!sl) typesByShortName.set(t.name, sl = []);
+        sl.push(t.fullName);
+      }
+      sym = { typeByFullName, typesByShortName, typesBySourceFile, duplicateTypes: dups,
               assemblies: raw.symbols.assemblies || [], stats: raw.symbols.stats || {} };
     }
 
@@ -233,7 +248,11 @@ function loadCache(root) {
 }
 
 let _log = () => {};
-function setLogger(fn) { _log = fn; projectmap.setLogger(msg => _log(`[index] ${msg}`)); }
+function setLogger(fn) {
+  _log = fn;
+  projectmap.setLogger(msg => _log(`[index] ${msg}`));
+  impact.setLogger(msg => _log(`[index] ${msg}`));
+}
 function log(msg) { _log(`[index] ${msg}`); }
 
 /**
@@ -453,6 +472,20 @@ function toolDefinitions() {
       annotations: ro,
     },
     {
+      name: 'unity_impact_analysis',
+      description: 'What breaks if you change, rename or delete this type, method or asset. Joins every axis the index has and keeps them separate, because each breaks differently: IL callers, subclasses, assets whose components use the type, assets referencing the asset, UnityEvent Inspector wirings, assembly-qualified type-name strings in Behavior graphs, const-path loads from code, ProjectSettings and build-scene membership, and attribute entry points. Reports what it cannot see in the same response — dynamic load sites, interface implementers (not indexed), skipped binaries — because zero on every axis is not proof that nothing breaks.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          target: { type: 'string', description: "A type name ('Hurtbox'), a 'Type::Method' key, or an asset path / 32-character GUID" },
+          depth: { type: 'integer', description: 'Caller levels to follow (default 1, max 3). Level 2+ come back as counts with a sample; the inheritance closure is always complete' },
+          maxPerAxis: { type: 'integer', description: 'Items listed per axis (default 25, max 200). Omitted counts are always reported' },
+        },
+        required: ['target'],
+      },
+      annotations: ro,
+    },
+    {
       name: 'unity_project_map',
       description: 'Orientation for an unfamiliar project, within a token budget: which scenes and prefabs each script type is actually placed in, types that no code calls but assets attach (dead to a call graph, alive at run time), entry points from method attributes and Inspector wiring, and source areas ranked by how much of the project data attaches to them. Reads the same index as the other local tools, so no Unity round-trip. Ordering components (attachment, git churn, caller count) ship with every entry, and the response carries the measured hit rate — the map is orientation, not a substitute for search.',
       inputSchema: {
@@ -504,6 +537,7 @@ function callLocalTool(name, args, port) {
   else if (name === 'unity_find_callees') result = queries.findCallees(idx, a);
   else if (name === 'unity_get_asset_components') result = queries.getAssetComponents(idx, a);
   else if (name === 'unity_project_map') result = projectmap.buildProjectMap(idx, a);
+  else if (name === 'unity_impact_analysis') result = impact.buildImpact(idx, a);
   else if (name === 'unity_find_missing_scripts') {
     // Missing Script 판정에는 전체 GUID 커버리지가 필수다.
     // Assets/Packages 만으로 판정하면 패키지 스크립트가 전부 'missing' 으로 잡힌다

@@ -271,6 +271,7 @@ function buildSymbolIndex(root, opts = {}) {
   }
 
   const typeByFullName = new Map();     // 전체 이름 -> 타입
+  const duplicateTypes = [];            // 전체 이름이 겹쳐 첫 것에 밀린 타입들(아래 주석 참조)
   const typesByShortName = new Map();  // 짧은 이름 -> [타입...]
   const typesBySourceFile = new Map(); // 프로젝트 상대 .cs 경로 -> [타입...]
   const assemblies = [];
@@ -295,6 +296,12 @@ function buildSymbolIndex(root, opts = {}) {
     for (const t of a.types) {
       typeCount++;
       if (!typeByFullName.has(t.fullName)) typeByFullName.set(t.fullName, t);
+      // 같은 전체 이름이 어셈블리를 넘어 또 나오면 첫 것만 남는다(위 줄). 그 사실을 버리지 않는다 —
+      // 짧은 이름 유일성 판정이 그것에 걸려 있다. 실측(MainProject): 1,169개 중 123개가 여기 걸리고,
+      // 대부분 컴파일러 생성이지만 `Segment`/`PassData`/`EffectState`/`Tab` 처럼 실제 타입도 있다.
+      // 캐시가 이걸 잃으면 모든 짧은 이름이 유일해 보이고, 그 유일성에 기대는 두 곳
+      // (`resolveScriptType` 의 파일명 폴백, 영향 분석의 대상 해석)이 조용히 하나를 골라 답한다.
+      else duplicateTypes.push(t);
 
       let shortList = typesByShortName.get(t.name);
       if (!shortList) typesByShortName.set(t.name, shortList = []);
@@ -309,7 +316,7 @@ function buildSymbolIndex(root, opts = {}) {
   }
 
   return {
-    typeByFullName, typesByShortName, typesBySourceFile, assemblies,
+    typeByFullName, typesByShortName, typesBySourceFile, assemblies, duplicateTypes,
     stats: {
       dllFiles: files.length,
       userAssemblies,

@@ -614,6 +614,20 @@ function getTypeSymbols(index, args) {
 
   let info = sym.typeByFullName.get(q);
   let candidates = null;
+  let sameFullName = null;
+
+  // 전체 이름이 맞아도 그 이름을 여러 타입이 공유할 수 있다. 이 인덱스의 전체 이름은
+  // `namespace.name` 이고 **중첩 타입의 선언 타입을 담지 않는다.** 그래서 서로 다른 클래스
+  // 안의 `PassData` 셋이 한 이름으로 겹친다(실측 2026-08-26: 사용자 어셈블리 전체에서
+  // 겹쳐 밀린 타입 123개, 전부 중첩 타입. Assembly-CSharp 안에서는 `<>c` 11 / `PassData` 3 /
+  // `Segment` 2). 맵은 첫 것만 담으므로 나머지에 대한 질문에도 첫 것의 답이 나간다.
+  // 이름을 고쳐 구분하는 것은 호출 그래프 키까지 바꾸는 일이라 별건으로 남기고,
+  // 여기서는 **겹친다는 사실을 응답에 싣는다.**
+  {
+    const all = sym.typesByShortName.get(q) || [];
+    const dupCount = all.filter(fn => fn === q).length;
+    if (dupCount > 1) sameFullName = dupCount;
+  }
 
   if (!info) {
     const shortMatches = sym.typesByShortName.get(q) || [];
@@ -645,6 +659,14 @@ function getTypeSymbols(index, args) {
 
   const maxMembers = args.maxMembers > 0 ? Math.min(args.maxMembers, 500) : 100;
   return {
+    ...(sameFullName ? {
+      ambiguousFullName: sameFullName,
+      ambiguousFullNameNote:
+        `${sameFullName} types in the user assemblies carry the full name '${q}'. This index keys ` +
+        'types by namespace.name and does not include the declaring type of a nested type, so ' +
+        'nested types with the same name collide. The members below are from one of them and the ' +
+        'others are not reachable by name here.',
+    } : {}),
     fullName: info.fullName,
     name: info.name,
     namespace: info.namespace || null,

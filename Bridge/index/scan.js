@@ -464,7 +464,9 @@ function fingerprintFrom(metaFiles, yamlFiles, otherFiles) {
 
 /** 인덱스를 만들지 않고 지문만 계산한다. 캐시 유효성 검사용. */
 function fingerprint(root, opts = {}) {
-  const assetRoots = [path.join(root, 'Assets')];
+  // buildIndex 와 **같은 루트**여야 한다. 다르면 ProjectSettings 변경이 지문에 안 잡혀
+  // 낡은 캐시를 계속 서빙한다(빌드 씬 목록을 바꿔도 인덱스가 모른다).
+  const assetRoots = [path.join(root, 'Assets'), path.join(root, 'ProjectSettings')];
   const metaRoots = [path.join(root, 'Assets'), path.join(root, 'Packages')];
   if (opts.includePackageCache) metaRoots.push(path.join(root, 'Library', 'PackageCache'));
   const assetFiles = collectFiles(assetRoots);
@@ -476,7 +478,15 @@ function buildIndex(root, opts = {}) {
   const t0 = Date.now();
 
   // YAML 은 Assets 만 본다. 패키지 안의 프리팹은 우리가 바꿀 대상이 아니다.
-  const assetRoots = [path.join(root, 'Assets')];
+  //
+  // 예외: `ProjectSettings` 는 **참조 출처로** 본다. 여기 있는 `.asset` 들이 Assets 의
+  // GUID 를 가리키는데(실측 2026-08-26: 파일 31개에서 참조 20건 / 대상 에셋 18개,
+  // 그중 15건이 `EditorBuildSettings` 의 빌드 씬) 스캔 루트 밖이라 인덱스에 없었다.
+  // 결과: `unity_find_references('Assets/0.Scenes/MainFlow/0.BootStrapScene.unity')` 가
+  // "참조 1건" 을 답한다 — **빌드 0번 씬인데** 빌드 설정이 참조한다는 사실이 빠진 채로.
+  // 삭제·이름변경 판단에 쓰이는 도구에서 이건 §4-(21) 과 같은 형태의 오답이다.
+  // 비용은 파일 31개 — 무시할 수 있다.
+  const assetRoots = [path.join(root, 'Assets'), path.join(root, 'ProjectSettings')];
 
   // .meta 는 참조 해석에 필요하므로 Packages 까지 본다.
   // PackageCache 는 45배 비싸므로 기본 제외 — 옵션으로만 켠다.
@@ -540,6 +550,8 @@ function buildIndex(root, opts = {}) {
     stats: {
       metaFiles: metaFiles.metas.length,
       yamlFiles: assetFiles.yamls.length,
+      // 그중 `ProjectSettings` 에서 온 것. Assets 기준 숫자(1,144)와 비교 가능하게 따로 센다.
+      settingsFiles: assetFiles.yamls.filter(p => p.indexOf('ProjectSettings') >= 0).length,
       guids: meta.guidToPath.size,
       referencedGuids: yaml.refs.size,
       referenceEdges: edges,
