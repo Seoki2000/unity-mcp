@@ -227,12 +227,20 @@ BombAction (보스 행동트리 노드)
 | 축 | 실측 | 어디에 실리나 |
 |---|---|---|
 | UnityEvent 퍼시스턴트 콜 | 파일 23 / 배선 **24**건, 22건은 조인으로 타입까지 해석 | `find_callers` → `inspectorWirings` |
-| 타입 이름 문자열 참조 | 후보 7,460건 중 사용자 타입 **48**개 / 엣지 52 | `find_component_usages`·`get_type_symbols` → `referencedByTypeName` |
+| 타입 이름 문자열 참조 | 후보 7,460건 중 사용자 타입 **48**개 / 엣지 52 | `find_references`·`find_component_usages`·`get_type_symbols` → `referencedByTypeName` |
 | 속성 진입점 | 속성 붙은 메서드 **243**개 (MenuItem 70 / Test 59 / ClientRpc 39 / …) | `find_callers` → `attributes` |
 | 경로 기반 로드 | 엣지 **23**개 (해석 25 / 미해석 2 / 여전히 동적 44) | 참조 인덱스에 합류 |
 
 **새 도구는 0개다.** 기존 도구의 응답이 정확해졌을 뿐이라 `tools/list` 고정비는
 39,669 B 그대로다. 도구를 늘리는 것보다 이쪽이 낫다 — AI 가 새로 배울 것이 없다.
+
+단, 이 방식에는 조건이 붙는다(2026-08-25 에 배웠다). 타입 이름 축을 처음 붙일 때
+`find_component_usages` 와 `get_type_symbols` 에만 실었고 **`find_references` 를 빼먹었다.**
+그래서 `unity_find_references(BombAction.cs)` 가 여전히 "참조 0" 을 답했다 — 인덱스는
+엣지를 갖고 있는데 정작 "지워도 되나" 를 묻는 이름의 도구가 몰랐다. 스윕 결과 38건.
+같은 날 Unity 를 켜서 대조해보니 `AssetDatabase.GetDependencies` 도 이 축을 모르므로
+(에셋 24,233개 전수, 참조 0) **두 출처가 합창하는 오답**이었다. 지금은 셋 다 답한다.
+도구를 늘리지 않는 선택은 **0 을 답할 수 있는 도구를 빠짐없이 고칠 때만** 정확도가 된다.
 
 설계에서 지킨 것 셋:
 

@@ -93,6 +93,18 @@ were added**: existing responses simply got correct, so the `tools/list` fixed c
 unchanged at 39,669 B. Inspector wirings are reported *separately* from code callers rather
 than summed — they are different things and need different fixes.
 
+**Cross-checked against the live editor (2026-08-25).** Those claims were made without ever
+opening Unity, so they were re-measured against `AssetDatabase.GetDependencies`: all five
+predictions held — Unity knows the `.fbx` → `.mat` (`.meta externalObjects`) and
+`.shadergraph` → `.png` edges, and does *not* know the type-name or const-path edges. The live
+`tools/list` merge path returns byte-for-byte what the disk-cache path does (82 tools /
+39,669 B). Preparing the control group exposed one defect of its own: the type-name axis had
+been wired into `find_component_usages` and `get_type_symbols` but **not** into
+`find_references`, so `unity_find_references(BombAction.cs)` still answered `totalCount: 0` —
+38 scripts were affected, and Unity's own dependency database answers 0 for them too (24,233
+asset paths scanned), which made it an error two independent sources agreed on. Adding an axis
+to the index is only accurate once *every* tool that can answer zero knows about it.
+
 **Known limits:** references assembled at run time (`Resources.Load(dir + name)`, Addressables
 addresses) stay invisible — 44 such call sites here, and a zero result reports that count; no
 incremental index refresh (call `unity_index_rebuild` after asset changes);
