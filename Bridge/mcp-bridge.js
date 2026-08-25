@@ -8,6 +8,17 @@ const indexTools = require('./index/tools');
 
 const UNITY_PORT = process.env.UNITY_MCP_PORT || 3000;
 
+// initialize 의 serverInfo.version. 상수로 박아두면 릴리스마다 어긋난다 —
+// 실측(2026-08-25): package.json 이 2.3.0-dev.0.0.3 인데 핸드셰이크는 2.2.0 을 답하고 있었다.
+// 버전을 묻는 쪽에 조용히 틀린 값을 주는 것이므로 패키지에서 읽는다.
+const PACKAGE_VERSION = (() => {
+    try {
+        return JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'package.json'), 'utf8')).version || '0.0.0';
+    } catch (e) {
+        return '0.0.0';
+    }
+})();
+
 // 'localhost' 단일 해석에 의존하면 서버(Mono HttpListener)가 ::1 한쪽에만 바인딩하는 환경에서
 // 서버가 켜져 있어도 ECONNREFUSED가 난다(2026-07-19 실측: [::1]:3000 단독 LISTEN, IPv4 없음).
 // 명시적 루프백 후보를 순환하며 마지막으로 성공한 호스트를 유지한다(sticky).
@@ -263,7 +274,7 @@ rl.on('line', (line) => {
             result: {
                 protocolVersion: requestedVersion,
                 capabilities: { tools: { listChanged: false } },
-                serverInfo: { name: 'unity-mcp-bridge', version: '2.2.0' }
+                serverInfo: { name: 'unity-mcp-bridge', version: PACKAGE_VERSION }
             }
         }));
         return;

@@ -204,6 +204,23 @@ function findReferences(index, args) {
   const referencing = set ? [...set].sort() : [];
   const page = pageOf(referencing, args.offset, args.maxResults);
 
+  // 대상이 `.cs` 면 GUID 역참조만으로는 반쪽이다. 타입을 **이름 문자열로** 부르는 에셋
+  // (Behavior 그래프 노드 등)은 `m_Script` GUID 를 쓰지 않으므로 이 인덱스에 안 걸린다.
+  //
+  // 실측(2026-08-25, 교차검증): `BombAction.cs` 가 여기서 `totalCount: 0` 을 받았다.
+  // 그런데 같은 인덱스가 `Wells.asset` → `BombAction` 엣지를 이미 갖고 있었고, 그것이
+  // `unity_get_type_symbols` / `unity_find_component_usages` 에만 실려 있었다.
+  // 이 도구는 "지워도 되나" 에 가장 먼저 쓰이는 이름이다. 여기서 0 이 나오면 그 0 이
+  // 결론이 된다 — 게다가 아래 note 가 대조군으로 권하는 Unity 쪽도 같이 0 을 답한다
+  // (실측: 에셋 24,233개 전수, 참조 0). 두 출처가 합창하는 오답이 가장 나쁜 형태다.
+  const targetPath = index.guidToPath.get(guid) || '';
+  const typeNameHits = /\.cs$/i.test(targetPath)
+    ? (() => {
+        const join = resolveScriptType(index, guid);
+        return join && join.resolved && join.type ? typeNameRefsFor(index, join.type.fullName) : [];
+      })()
+    : [];
+
   return {
     target: args.target,
     guid,
@@ -231,9 +248,25 @@ function findReferences(index, args) {
           'but verify before treating them as the only thing keeping this asset alive.',
       };
     })(),
+    // 이름 문자열로 이 타입을 부르는 에셋. `references` 에 합치지 않는다 — 출처가 다르고
+    // (직렬화 참조 필드가 아니라 문자열) 페이지네이션 대상도 아니다. 대신 별도 필드로 싣고,
+    // 0 일 때는 아래 note 를 이쪽으로 바꿔 "없다" 로 읽히지 않게 한다.
+    ...(typeNameHits.length ? {
+      referencedByTypeName: typeNameHits,
+      typeNameNote: 'These assets reference the type by its assembly-qualified name (for example a ' +
+        'Unity Behavior graph node), not by m_Script GUID, so they are not in the reference count above. ' +
+        'The class is instantiated by that framework at run time — deleting or renaming it breaks those ' +
+        'assets, and neither this GUID index nor Unity own GetDependencies reports the edge.',
+    } : {}),
     // 0 은 두 가지 뜻이 될 수 있다 — 정말 참조가 없거나, 참조하는 파일 종류를 안 봤거나.
     // 구분이 안 되면 "미사용이니 지워도 된다" 로 잘못 읽힌다. 그래서 0 일 때만 근거를 싣는다.
-    ...(page.total === 0 ? {
+    ...(page.total === 0 && typeNameHits.length ? {
+      note: `totalCount is 0, but this script is NOT unused: ${typeNameHits.length} asset(s) reference ` +
+            'the type by name — see referencedByTypeName. No serialized m_Script GUID reference exists, ' +
+            'which is why the count is 0. Use unity_find_component_usages for the component/type view and ' +
+            'unity_find_callers for code callers and Inspector-wired methods before deleting anything.',
+    } : {}),
+    ...(page.total === 0 && !typeNameHits.length ? {
       // 0 일 때만 근거를 싣는다. 무엇을 봤고 무엇을 못 봤는지 없이 "0" 만 주면
       // "미사용이니 지워도 된다" 로 읽힌다.
       scanned: index.stats ? {
@@ -253,10 +286,17 @@ function findReferences(index, args) {
             'AssetDatabase.LoadAssetAtPath), but a path built from a variable is not — ' +
             'unresolvableDynamicLoadSites says how many such call sites exist in this project. ' +
             'Addressables addresses are also not mapped yet. ' +
+            (/\.cs$/i.test(targetPath)
+              ? 'This target is a script, so the type-name axis was checked too (assets naming the type ' +
+                'as a string) and it is empty as well; Inspector-wired methods are per-method, ask ' +
+                'unity_find_callers. '
+              : '') +
             'Cross-check with unity_search_project (searchType=reference) as a second opinion, but note ' +
             'that neither source is complete: measured 2026-08-23, Unity AssetDatabase.GetDependencies ' +
-            'does NOT report VFX Graph internal references. Treat a zero from either side as unproven, ' +
-            'not as proof of no reference.',
+            'does NOT report VFX Graph internal references, nor type-name or path-based references ' +
+            '(re-measured 2026-08-25 against the live editor). In this project that search also scans ' +
+            '24,233 asset paths and needs about 41 s cold, which exceeds the 30 s editor queue timeout. ' +
+            'Treat a zero from either side as unproven, not as proof of no reference.',
     } : {}),
   };
 }
