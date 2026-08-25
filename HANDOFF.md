@@ -1,7 +1,7 @@
 # 작업 인수 (다음 세션용)
 
-최종 갱신: 2026-08-24
-브랜치: `optimized` — 정본. 지난 작업 브랜치들을 fast-forward 머지해 합치고 지웠다.
+최종 갱신: 2026-08-24 (레이어 D 완료, `316bf3d`, `2.3.0-dev.0.0.3`)
+브랜치: `optimized` — 정본. 원격과 동기화돼 있다. 지난 작업 브랜치들을 fast-forward 머지해 합치고 지웠다.
 게임 프로젝트의 핀은 `9d420e6`(이 브랜치의 조상)을 가리킨다.
 **`main` 이 아니다. §1 주의사항 참조**
 
@@ -33,6 +33,49 @@ Unity 로 번역하면 — `.cs` 는 AI 가 이미 읽는다. 못 읽는 절반�
 **측정 보고서: `C:/dev/unity-mcp-measurement-report-dev-0.0.1.md`** (토큰·정확도 실측, 근거 커밋 목록).
 dev-0.0.2 절(§8)과 독립 감사 절(§9)이 뒤에 붙어 있다. 결론 한 줄은 그대로다: 이 작업은 토큰을 줄인 것이 아니라
 **정확도를 산 것**이다(세션 고정비 약 +2,500 토큰, 손익분기는 인덱스 질의 1회/세션).
+
+---
+
+## 0.5 ⏭️ 다음 세션은 여기서 시작한다 — Unity 켜고 교차검증
+
+2026-08-24 세션은 **Unity 를 한 번도 켜지 않고** 끝냈다(C# 은 한 줄도 안 바꿨으므로 안전하다).
+그래서 라이브 검증 하나와, 이번에 새로 주장한 것들의 **교차검증**이 밀려 있다.
+지난 감사에서 "양쪽 분석이 공유한 전제가 Unity 를 열어 재보니 둘 다 틀렸다"(§4-8)는 일이
+있었으므로, 새 주장도 같은 대접을 받아야 한다.
+
+### 순서
+
+**1) Unity 를 켠다.** `C:/Unity/MainProject`. 컴파일이 끝나길 기다린 뒤
+`~/.unity-mcp/auth-token-3000.json` 이 갱신됐는지 확인한다(브릿지가 projectRoot 를 여기서 읽는다).
+
+**2) 라이브 `tools/list` 를 확인한다.** 이번 세션은 **디스크 캐시 경로로만** 82개를 확인했다.
+Unity 가 살아있을 때의 병합 경로(`normalizeSchema`)는 건드리지 않았지만 재확인은 안 했다.
+기대: 82개(Unity 73 + 로컬 9), 39,669 B.
+
+**3) 새 엣지 5종을 Unity 의 의존성 DB 와 대조한다.** 각각 `unity_search_project`
+(searchType=reference) 또는 `AssetDatabase.GetDependencies` 로 같은 질문을 던진다.
+
+| # | 우리 주장 | 대조 | 내 예상 |
+|---|---|---|---|
+| 1 | `Wells.asset` 이 `BombAction.cs` 를 쓴다 (타입 이름 문자열) | GetDependencies | **모를 것** — 문자열이라 의존성이 아니다 |
+| 2 | `4.MapScene.unity` 의 버튼이 `GameManager.GoToResultButton` 을 부른다 | — | Unity 에 이 질문을 하는 API 자체가 없다 |
+| 3 | `SK_23.fbx` 가 `Boss_23_base.mat` 을 참조한다 (`.meta` externalObjects) | GetDependencies | **알 것** |
+| 4 | `AimIndicator.shadergraph` 가 `SkillRange.png` 를 쓴다 | GetDependencies | **알 것** |
+| 5 | `RenderingLookAuthoring.cs` 가 `MainCamera.prefab` 을 로드한다 (경로 상수) | GetDependencies | **모를 것** — 코드를 읽지 않는다 |
+
+**예상이 빗나가면 그쪽이 배울 점이다.** 3·4 에서 Unity 가 모른다고 나오면 우리 인덱스가
+그 축에서 더 완전하다는 근거가 하나 더 생기고, 1·5 에서 Unity 가 안다고 나오면
+우리가 몰랐던 경로가 있다는 뜻이다. 결과는 보고서 §9 뒤에 §10 으로 적고,
+어긋난 것은 **문서를 고친다**.
+
+**4) 그 다음** Phase 3 P1(프로젝트 맵)으로 간다. §3 참조.
+
+### 켜기 전에 알아 둘 것
+
+- 인덱스 도구는 Unity 없이도 동작한다. 켜는 이유는 **대조군** 때문이지 기능 때문이 아니다
+- Unity 가 켜지면 `Library/ScriptAssemblies` 가 다시 빌드될 수 있다 → 캐시 지문이 어긋나
+  인덱스가 한 번 재빌드된다(5.8 초). 정상이다
+- `file:` 패키지라 스크립트를 고쳐도 에디터가 자동으로 안 문다 — §1-(3) 참조
 
 ---
 
