@@ -460,7 +460,52 @@ function resolveMethodKey(index, query) {
     };
   }
 
-  return { error: `Method '${q}' not found in the call graph (project code only; calls into UnityEngine/BCL are not indexed).` };
+  // 호출 그래프에 키가 없다고 끝내면 안 된다. **IL 엣지가 하나도 없는 메서드**는
+  // 여기서 에러가 되고, 그래서 속성 진입점과 인스펙터 배선 축에 도달하지 못한다.
+  //
+  // 실측(2026-08-26, 독립 감사 지적 후 재현): 속성이 붙은 메서드 20개가 호출 그래프 키 집합에
+  // 없다 — `ProfilerWindow::Open`([MenuItem]), `EffectHitPoint::ResetWarnings`
+  // ([RuntimeInitializeOnLoadMethod]), NUnit `SetUp`/`TearDown` 등. 엔진이나 러너만 부르는
+  // 메서드라 IL 호출자가 0 인 것이 정상인데, **물어볼 수조차 없었다.** 배선 키 3개도 같다.
+  // §4-(21) 과 같은 형태다: 데이터는 인덱스에 있고 이 응답만 몰랐다.
+  //
+  // 그래서 심볼 인덱스에서 선언을 찾아 키를 만든다. 호출자는 0 이지만 다른 축은 답한다.
+  const sym = index.symbols;
+  if (sym) {
+    const sep = q.indexOf('::');
+    if (sep > 0) {
+      const ty = q.slice(0, sep), mn = q.slice(sep + 2);
+      const info = sym.typeByFullName.get(ty);
+      if (info && (info.methods || []).some(m => m.name === mn)) {
+        return { key: q, declaredOnly: true };
+      }
+    } else {
+      // 이름만 준 경우 — 선언에서 찾는다.
+      const hits = [];
+      for (const [ty, info] of sym.typeByFullName) {
+        for (const m of (info.methods || [])) if (m.name === q) hits.push(ty + '::' + m.name);
+      }
+      const uniq = [...new Set(hits)].sort();
+      if (uniq.length === 1) return { key: uniq[0], declaredOnly: true };
+      if (uniq.length > 1) {
+        return {
+          error: `'${q}' matches ${uniq.length} declared methods with no IL edges. Pass 'Type::Method'.`,
+          candidates: uniq.slice(0, 25),
+        };
+      }
+    }
+  }
+
+  // 마지막 축: 인스펙터 배선이 그 키를 알고 있으면 답할 수 있다. Unity 내장 메서드에
+  // 배선된 경우가 그렇다(실측: `UnityEngine.GameObject::SetActive` — 심볼 인덱스는
+  // 사용자 어셈블리만 담으므로 선언을 못 찾지만, 배선은 우리가 인덱스했다).
+  if (index.inspectorWiring && index.inspectorWiring.byKey && index.inspectorWiring.byKey.has(q)) {
+    return { key: q, declaredOnly: 'inspector wiring only (method is outside the user assemblies)' };
+  }
+
+  return { error: `Method '${q}' not found — neither the call graph nor the symbol index has it ` +
+                  `(user assemblies only; calls into UnityEngine/BCL are not indexed). ` +
+                  `Check the spelling, or the type may live in a package.` };
 }
 
 /**
@@ -529,6 +574,13 @@ function findCallers(index, args) {
 
   return {
     method: r.key,
+    // 호출 그래프에 엣지가 없어 **선언에서** 해석한 경우. 호출자 0 의 뜻이 다르다 —
+    // "호출자를 찾았고 0" 이 아니라 "이 메서드는 IL 그래프에 아예 없다" 다.
+    ...(r.declaredOnly ? {
+      resolvedFrom: typeof r.declaredOnly === 'string'
+        ? r.declaredOnly
+        : 'symbol declaration (no IL edges for this method)',
+    } : {}),
     totalCount: page.total,
     returnedCount: page.items.length,
     offset: page.offset,
