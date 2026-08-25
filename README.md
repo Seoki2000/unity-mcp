@@ -7,13 +7,13 @@
 *Read this in other languages: [한국어](README_ko.md)*
 A **Model Context Protocol (MCP)** server for Unity that enables AI agents to **query and control** the Unity Editor. This local-optimized version is enhanced with additional tools for Behavior Trees, Window Management, and advanced GameObject/Hierarchy manipulation.
 
-## Fork dev build — dev-0.0.2
+## Fork dev build — dev-0.0.3
 
 This fork (`Seoki2000/unity-mcp`, branch `optimized`) diverges from upstream. Numbers below
 are measured against a live Unity editor, not estimated. Full record in Korean:
 [README_ko.md](README_ko.md#포크-개발-버전--dev-001).
 
-Package version: `2.3.0-dev.0.0.2` · baseline commit: `5331a34`
+Package version: `2.3.0-dev.0.0.3` · baseline commit: `5331a34`
 
 **Added since the previously pinned `2ea969e`:** path-escape guard and session-token auth;
 tool annotations, pagination and response caps; an out-of-process project index (reverse
@@ -77,8 +77,24 @@ served from the disk cache omitted newly added bridge tools — exactly when Uni
 they matter most. And the new value tool read any file the caller named: `../../..` escaped
 the project root, re-introducing on the JS side what Phase 0-A had guarded in C#.
 
-**Known limits:** references that never store a GUID — `Resources.Load("path")`, Addressables
-addresses, run-time paths — are invisible to any static index, and a zero result says so; no
+**dev-0.0.3 — the axis where data calls code.** The index saw code→code (IL call graph) and
+data→data (GUID references), but in Unity a large share of calls live *inside assets as data*,
+and that axis was missing entirely — so live code was reported dead. Measured:
+`GameManager.GoToResultButton` had **zero callers** yet is wired to buttons in two scenes via
+UnityEvent, and `BombAction` was reported unused by all three tools while being a node in the
+boss behaviour tree (stored as `"BombAction, Assembly-CSharp, Version=…"`). Both read as
+"safe to delete". Four axes now close that gap: UnityEvent persistent calls (24 wirings, 22
+resolved to a compiled type through the join), type-name string references (48 user types /
+52 edges), method attributes from the CustomAttribute table (243 methods — `[MenuItem]` 70,
+`[Test]` 59, `[ClientRpc]` 39, so a zero caller count no longer implies dead), and path-based
+asset loads (23 edges; literal-only extraction found just 1, because 70 of 71 call sites store
+the path in a `const string` — folding those constants is what made it work). **No new tools
+were added**: existing responses simply got correct, so the `tools/list` fixed cost is
+unchanged at 39,669 B. Inspector wirings are reported *separately* from code callers rather
+than summed — they are different things and need different fixes.
+
+**Known limits:** references assembled at run time (`Resources.Load(dir + name)`, Addressables
+addresses) stay invisible — 44 such call sites here, and a zero result reports that count; no
 incremental index refresh (call `unity_index_rebuild` after asset changes);
 `totalReferenceCount` counts (asset, GUID) pairs, not raw occurrences; `unity_find_callers`
 indexes project-internal calls only and merges overloads under `Type::Method`; component
