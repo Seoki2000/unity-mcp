@@ -28,7 +28,9 @@ repo; a bridge launcher that resolves `PackageCache` at run time. Tools: **67 â†
 | `2ea969e` | 24,968 | 67 | 372.7 |
 | dev-0.0.1 before diet | 40,376 | 81 | 498.5 |
 | dev-0.0.1 now | 37,067 | 81 | 457.6 |
-| **dev-0.0.2** | **39,669** | **82** | **483.8** |
+| dev-0.0.2 | 39,669 | 82 | 483.8 |
+| dev-0.0.4 | 40,905 | 83 | 492.8 |
+| **dev-0.0.5** | **42,142** | **84** | **501.7** |
 
 That is **+48.5%** over the old pin â€” roughly +3,000 tokens per session. dev-0.0.1 claws
 back 3,309 B of it losslessly by omitting annotation hints that equal the MCP spec defaults.
