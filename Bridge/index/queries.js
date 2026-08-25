@@ -178,6 +178,16 @@ function resolveScriptType(index, guid) {
 }
 
 /**
+ * 이 타입을 **이름 문자열로** 참조하는 에셋(Behavior 그래프 노드 등).
+ * 프리팹에 붙는 것도 아니고 코드가 부르는 것도 아니라, 이 축이 없으면 통째로 안 보인다.
+ */
+function typeNameRefsFor(index, fullName) {
+  if (!index.typeNameRefs || !fullName) return [];
+  const set = index.typeNameRefs.byType.get(fullName);
+  return set ? [...set].sort() : [];
+}
+
+/**
  * 이 에셋(경로 또는 GUID)을 참조하는 에셋들.
  * 기존 unity_search_project type=reference 를 대체한다.
  */
@@ -282,6 +292,18 @@ function findComponentUsages(index, args) {
     nextOffset: page.nextOffset,
     truncated: page.truncated,
     usedBy: page.items,
+    // m_Script 로 붙어 있지 않지만 **타입 이름 문자열로** 쓰이는 곳.
+    // 이게 없으면 Behavior 그래프 노드처럼 "아무 데도 안 붙은" 클래스가 죽은 것처럼 보인다.
+    ...(() => {
+      const byName = join.resolved && join.type ? typeNameRefsFor(index, join.type.fullName) : [];
+      if (!byName.length) return {};
+      return {
+        referencedByTypeName: byName,
+        typeNameNote: 'These assets reference the type by its assembly-qualified name (for example a Unity ' +
+          'Behavior graph node), not by m_Script. The class is instantiated by that framework at run time, ' +
+          'so it has no component attachment and no IL caller — deleting or renaming it breaks those assets.',
+      };
+    })(),
   };
 }
 
@@ -404,6 +426,32 @@ function resolveMethodKey(index, query) {
  * 그중 4건은 주석이고 나머지에는 선언과 오버로드 내부 연쇄가 섞여 있다.
  * 호출 그래프는 실제 호출자 8개만 준다.
  */
+/**
+ * 이 메서드를 **인스펙터에서** 부르는 배선(UnityEvent 퍼시스턴트 콜).
+ *
+ * IL 호출 그래프에는 절대 나타나지 않는다 — 호출이 코드가 아니라 에셋 안의 데이터이기 때문이다.
+ * 이걸 합치지 않으면 "호출자 0" 이 "죽은 코드" 로 읽힌다(실측: GameManager.GoToResultButton).
+ */
+function inspectorWiringsFor(index, key, methodName) {
+  const w = index.inspectorWiring;
+  if (!w) return [];
+
+  const out = [];
+  const seen = new Set();
+  const byKey = w.byKey.get(key);
+  if (byKey) for (const a of byKey) { if (!seen.has(a)) { seen.add(a); out.push({ asset: a, match: 'type' }); } }
+
+  // 타입이 해석되지 않은 배선은 메서드 이름으로만 걸린다. 근거가 약하므로 그렇게 표시한다.
+  const list = w.byMethod.get(methodName) || [];
+  for (const e of list) {
+    if (e.type) continue;                       // 타입이 있으면 위에서 이미 정확히 걸린다
+    if (seen.has(e.asset)) continue;
+    seen.add(e.asset);
+    out.push({ asset: e.asset, match: 'method-name-only', declaredType: e.declaredType || null });
+  }
+  return out;
+}
+
 function findCallers(index, args) {
   const r = resolveMethodKey(index, args.method);
   if (r.error) return r;
@@ -411,6 +459,9 @@ function findCallers(index, args) {
   const set = index.callGraph.callersOf.get(r.key);
   const callers = set ? [...set].sort() : [];
   const page = pageOf(callers, args.offset, args.maxResults);
+
+  const methodName = r.key.slice(r.key.indexOf('::') + 2);
+  const wirings = inspectorWiringsFor(index, r.key, methodName);
 
   return {
     method: r.key,
@@ -420,8 +471,23 @@ function findCallers(index, args) {
     nextOffset: page.nextOffset,
     truncated: page.truncated,
     callers: page.items,
+    // 인스펙터 배선. 코드 호출자와 **합치지 않고 따로** 낸다 — 성격이 다르다
+    // (하나는 IL 에서 디코딩한 호출, 하나는 에셋에 저장된 배선).
+    ...(wirings.length ? {
+      inspectorWiringCount: wirings.length,
+      inspectorWirings: wirings.slice(0, 50),
+      inspectorNote: 'This method is also wired in the Inspector (UnityEvent persistent call) from the ' +
+        'assets listed. Those calls exist in serialized data, not in code, so they never appear in the IL ' +
+        'call graph. Renaming or removing this method breaks them silently — the Editor shows the row as ' +
+        '<Missing> only when someone opens that object.',
+    } : {}),
     note: 'Overloads share one key (Type::Method), so callers of all overloads are merged. ' +
-          'Only calls from project (user assembly) code are indexed.',
+          'Only calls from project (user assembly) code are indexed.' +
+          (page.total === 0 && !wirings.length && index.inspectorWiring
+            ? ' No code callers and no Inspector wiring were found — but a method can still be reached by ' +
+              'reflection, by an attribute-driven entry point (MenuItem, RuntimeInitializeOnLoadMethod), ' +
+              'or by a framework that instantiates its declaring type by name. Zero is not proof it is dead.'
+            : ''),
   };
 }
 
@@ -525,6 +591,10 @@ function getTypeSymbols(index, args) {
     })),
     truncatedMembers: info.fields.length > maxMembers || info.methods.length > maxMembers,
     attachedTo,
+    ...(() => {
+      const byName = typeNameRefsFor(index, info.fullName);
+      return byName.length ? { referencedByTypeName: byName } : {};
+    })(),
     note: 'Field/method names come from the compiled assembly; source file mapping comes from the Portable PDB. ' +
           'Field type signatures are not decoded yet (Phase 2b-2).',
   };

@@ -14,6 +14,7 @@ const os = require('os');
 const scan = require('./scan');
 const symbols = require('./symbols');
 const callgraph = require('./callgraph');
+const wiring = require('./wiring');
 const queries = require('./queries');
 
 const PREFIX = 'unity_index_';   // 상태/재빌드 도구
@@ -73,7 +74,9 @@ function cachePath(root) {
 // 6: 참조 엣지 규칙 변경 (2026-08-24) — 맨 GUID 참조, .meta 참조, 자기 참조 제외.
 //    지문은 **디스크 상태**만 보므로 코드가 바뀐 것은 못 잡는다. 버전을 안 올리면
 //    기존 캐시가 옛 엣지(6,021)를 계속 서빙하고, 고친 오답이 그대로 남는다.
-const CACHE_VERSION = 6;
+// 7: 레이어 D 추가 — 인스펙터 배선 + 타입 이름 문자열 참조.
+//    캐시에 없으면 캐시로 뜬 세션에서 통째로 사라진다.
+const CACHE_VERSION = 7;
 
 function saveCache(index) {
   try {
@@ -93,6 +96,15 @@ function saveCache(index) {
       callGraph: index.callGraph ? {
         stats: index.callGraph.stats,
         callsFrom: [...index.callGraph.callsFrom].map(([k, v]) => [k, [...v]]),
+      } : null,
+      typeNameRefs: index.typeNameRefs ? {
+        stats: index.typeNameRefs.stats,
+        byType: [...index.typeNameRefs.byType].map(([t, s2]) => [t, [...s2]]),
+      } : null,
+      inspectorWiring: index.inspectorWiring ? {
+        stats: index.inspectorWiring.stats,
+        // byKey 는 byMethod 에서 재구성할 수 있으므로 저장하지 않는다(캐시 크기).
+        byMethod: [...index.inspectorWiring.byMethod].map(([m, list]) => [m, list]),
       } : null,
       symbols: index.symbols ? {
         stats: index.symbols.stats,
@@ -166,11 +178,37 @@ function loadCache(root) {
       cg = { callsFrom, callersOf, perAssembly: [], stats: raw.callGraph.stats || {} };
     }
 
+    let iw = null;
+    if (raw.inspectorWiring && Array.isArray(raw.inspectorWiring.byMethod)) {
+      const byMethod = new Map(raw.inspectorWiring.byMethod.map(([m, list]) => [m, list]));
+      const byKey = new Map();
+      for (const [, list] of byMethod) {
+        for (const e of list) {
+          if (!e || !e.type) continue;
+          const key = `${e.type}::${e.method}`;
+          let set = byKey.get(key);
+          if (!set) byKey.set(key, set = new Set());
+          set.add(e.asset);
+        }
+      }
+      iw = { byKey, byMethod, stats: raw.inspectorWiring.stats || {} };
+    }
+
+    let tnr = null;
+    if (raw.typeNameRefs && Array.isArray(raw.typeNameRefs.byType)) {
+      tnr = {
+        byType: new Map(raw.typeNameRefs.byType.map(([t, a]) => [t, new Set(a)])),
+        stats: raw.typeNameRefs.stats || {},
+      };
+    }
+
     return {
       root,
       includePackageCache: raw.includePackageCache,
       guidCoverage: raw.guidCoverage || 'assets',
       callGraph: cg,
+      inspectorWiring: iw,
+      typeNameRefs: tnr,
       guidToPath,
       pathToGuid,
       refs: new Map(raw.refs.map(([g, a]) => [g, new Set(a)])),
@@ -259,6 +297,26 @@ function ensureIndex(port, force, includePackageCache, cacheOnly) {
       log(`call graph unavailable: ${e.message}`);
       _index.callGraph = null;
       _index.stats.callGraphError = e.message;
+    }
+
+    // 레이어 D — 인스펙터 배선. 조인이 필요하므로 심볼 인덱스 뒤에 온다.
+    try {
+      const w = wiring.buildInspectorWiring(_projectRoot, _index.eventFiles || [], _index,
+        queries.resolveScriptType);
+      _index.inspectorWiring = w;
+      _index.stats.inspectorWiring = w.stats;
+      log(`inspector wiring built in ${w.stats.msTotal}ms — ${w.stats.calls} calls in ` +
+          `${w.stats.files} files, ${w.stats.resolvedByJoin} resolved by join` +
+          (w.stats.staleDeclaredNames ? `, ${w.stats.staleDeclaredNames} stale declared names` : ''));
+      const tn = wiring.buildTypeNameRefs(_projectRoot, _index.typeRefFiles || [], sym);
+      _index.typeNameRefs = tn;
+      _index.stats.typeNameRefs = tn.stats;
+      log(`type-name refs built in ${tn.stats.msTotal}ms — ${tn.stats.types} types referenced by name ` +
+          `in ${tn.stats.files} files (${tn.stats.candidates} candidates scanned)`);
+    } catch (e) {
+      log(`inspector wiring unavailable: ${e.message}`);
+      _index.inspectorWiring = null;
+      _index.stats.inspectorWiringError = e.message;
     }
   }
 

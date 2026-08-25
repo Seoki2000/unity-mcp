@@ -252,6 +252,12 @@ function buildYamlIndex(root, yamlFiles, meta) {
   const pathToGuid = meta && meta.pathToGuid ? meta.pathToGuid : null;
   const refs = new Map();
   const scriptRefs = new Map();
+  // 인스펙터 배선(UnityEvent)을 담은 파일. 여기서는 경로만 모은다 — 값 해석에는 심볼
+  // 인덱스가 필요한데 그건 아직 없다. 이 패스에서 텍스트를 이미 들고 있으므로
+  // 판별 비용이 사실상 0 이다(부분 문자열 검사 한 번).
+  const eventFiles = [];
+  // 어셈블리 수식 타입 이름(`Type, Assembly, Version=…`)을 담은 파일. 같은 이유로 여기서 고른다.
+  const typeRefFiles = [];
   let bytesParsed = 0;
   let filesFailed = 0;
   let bareEdges = 0;
@@ -296,6 +302,9 @@ function buildYamlIndex(root, yamlFiles, meta) {
     }
     bareEdges += bareOnly.size;
 
+    if (text.indexOf('m_PersistentCalls') !== -1) eventFiles.push(y);
+    if (text.indexOf('Version=') !== -1) typeRefFiles.push(y);
+
     SCRIPT_BLOCK_RE.lastIndex = 0;
     while ((m = SCRIPT_BLOCK_RE.exec(text)) !== null) {
       // fileID 0 은 "참조 없음"이다. Missing Script 로 오분류하면 안 된다.
@@ -306,7 +315,7 @@ function buildYamlIndex(root, yamlFiles, meta) {
     }
   }
 
-  return { refs, scriptRefs, bytesParsed, filesFailed, bareEdges };
+  return { refs, scriptRefs, bytesParsed, filesFailed, bareEdges, eventFiles, typeRefFiles };
 }
 
 /**
@@ -427,6 +436,9 @@ function buildIndex(root, opts = {}) {
     fingerprint: fingerprintFrom(metaFiles.metas, assetFiles.yamls, assetFiles.others),
     guidToPath: meta.guidToPath,
     pathToGuid: meta.pathToGuid,
+    // 인스펙터 배선 해석에 쓸 파일 목록(경로만).
+    eventFiles: yaml.eventFiles,
+    typeRefFiles: yaml.typeRefFiles,
     refs: yaml.refs,
     // 텍스트 일치로만 얻은 엣지(직렬화 구조가 아님). 응답에서 구분해 싣는다.
     weakRefs,
