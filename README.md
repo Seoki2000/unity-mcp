@@ -7,13 +7,13 @@
 *Read this in other languages: [한국어](README_ko.md)*
 A **Model Context Protocol (MCP)** server for Unity that enables AI agents to **query and control** the Unity Editor. This local-optimized version is enhanced with additional tools for Behavior Trees, Window Management, and advanced GameObject/Hierarchy manipulation.
 
-## Fork dev build — dev-0.0.3
+## Fork dev build — dev-0.0.4
 
 This fork (`Seoki2000/unity-mcp`, branch `optimized`) diverges from upstream. Numbers below
 are measured against a live Unity editor, not estimated. Full record in Korean:
 [README_ko.md](README_ko.md#포크-개발-버전--dev-001).
 
-Package version: `2.3.0-dev.0.0.3` · baseline commit: `5331a34`
+Package version: `2.3.0-dev.0.0.4` · baseline commit: `5331a34`
 
 **Added since the previously pinned `2ea969e`:** path-escape guard and session-token auth;
 tool annotations, pagination and response caps; an out-of-process project index (reverse
@@ -104,6 +104,25 @@ been wired into `find_component_usages` and `get_type_symbols` but **not** into
 38 scripts were affected, and Unity's own dependency database answers 0 for them too (24,233
 asset paths scanned), which made it an error two independent sources agreed on. Adding an axis
 to the index is only accurate once *every* tool that can answer zero knows about it.
+
+**dev-0.0.4 — the project map (`unity_project_map`).** One tool that answers "what does this
+project look like" inside a token budget. The roadmap called for centrality ranking; measuring it
+killed that premise. Scored against the 188 most recent commits of the consuming project, with the
+ranking built only from data older than those commits: caller-count centrality reaches hit@50 28.2%
+/ recall@50 12.2%, below asset attachment (33.0% / 13.6%) and git churn (33.5% / 23.0%); a uniform
+sample scores 19.1% / 7.5%. PageRank's top 20 is compiler-generated types (`<>c` merges the lambda
+class of all 14 assemblies under one key), a vendored audio library, and a
+`[Conditional("UNITY_EDITOR")]` log wrapper whose calls do not exist in a build. Top-20 Jaccard
+between axes is 0.03, so no composite score is computed either. What the tool emits instead is the
+part reading `.cs` cannot give: build-settings scene order with enabled flags (enabled is *not*
+production — dev and test scenes are in that list), registry assets found by out-degree rather than
+by name, which types are actually placed in which scenes and prefabs, the 69 types no code calls but
+assets attach, and four entry-point axes (attributes, Inspector wiring, type-name references,
+`[Conditional]`). Cost: `tools/list` 39,669 -> 40,905 B (+334 tokens per session), 48 ms warm per
+query. An acceptance probe ships with it — `node Tools/probe-project-map.js` runs seven questions
+whose answers are independently known from disk: 5/7 at a 4,000-token budget, 6/7 at the 6,000
+default, 7/7 at 8,000. That probe is what caught the type-name axis being missing from the map
+entirely; two rounds of reading the code had not.
 
 **Known limits:** references assembled at run time (`Resources.Load(dir + name)`, Addressables
 addresses) stay invisible — 44 such call sites here, and a zero result reports that count; no
