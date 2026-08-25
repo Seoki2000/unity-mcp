@@ -480,8 +480,10 @@ function buildIndex(root, opts = {}) {
   // YAML 은 Assets 만 본다. 패키지 안의 프리팹은 우리가 바꿀 대상이 아니다.
   //
   // 예외: `ProjectSettings` 는 **참조 출처로** 본다. 여기 있는 `.asset` 들이 Assets 의
-  // GUID 를 가리키는데(실측 2026-08-26: 파일 31개에서 참조 20건 / 대상 에셋 18개,
-  // 그중 15건이 `EditorBuildSettings` 의 빌드 씬) 스캔 루트 밖이라 인덱스에 없었다.
+  // GUID 를 가리키는데 스캔 루트 밖이라 인덱스에 없었다. 실측(2026-08-26): 스캔에 들어온
+  // 파일 27개에서 엣지 38개, 그중 프로젝트 에셋 대상 19개(씬 13 / 비-씬 6),
+  // 나머지는 패키지·빌트인 GUID 다. `EditorBuildSettings` 하나가 엣지 18개를 낸다
+  // (m_Scenes 항목은 14개이고, 그중 인덱스에서 경로가 풀리는 것이 13개다).
   // 결과: `unity_find_references('Assets/0.Scenes/MainFlow/0.BootStrapScene.unity')` 가
   // "참조 1건" 을 답한다 — **빌드 0번 씬인데** 빌드 설정이 참조한다는 사실이 빠진 채로.
   // 삭제·이름변경 판단에 쓰이는 도구에서 이건 §4-(21) 과 같은 형태의 오답이다.

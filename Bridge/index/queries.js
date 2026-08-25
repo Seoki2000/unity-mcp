@@ -528,7 +528,22 @@ function inspectorWiringsFor(index, key, methodName) {
   const out = [];
   const seen = new Set();
   const byKey = w.byKey.get(key);
-  if (byKey) for (const a of byKey) { if (!seen.has(a)) { seen.add(a); out.push({ asset: a, match: 'type' }); } }
+  if (byKey) {
+    // 직렬화된 배선이 적어둔 타입 이름이 지금 이름과 다를 수 있다. 실측(2026-08-26,
+    // 독립 감사 지적): 3건이 `TempGameManager` 를 적어두고 조인으로 `GameManager` 에 붙었다.
+    // 이름 변경을 판단할 때 알아야 하는 사실이라 응답에 남긴다 — 그 행들은 이미 낡았다.
+    const declaredBy = new Map();
+    const mName = key.slice(key.indexOf('::') + 2);
+    for (const e of (w.byMethod.get(mName) || [])) {
+      if (e && e.declaredType && e.type && e.declaredType !== e.type) declaredBy.set(e.asset, e.declaredType);
+    }
+    for (const a of byKey) {
+      if (seen.has(a)) continue;
+      seen.add(a);
+      const stale = declaredBy.get(a);
+      out.push(stale ? { asset: a, match: 'type', staleDeclaredType: stale } : { asset: a, match: 'type' });
+    }
+  }
 
   // 타입이 해석되지 않은 배선은 메서드 이름으로만 걸린다. 근거가 약하므로 그렇게 표시한다.
   const list = w.byMethod.get(methodName) || [];

@@ -402,6 +402,26 @@ function buildImpact(index, args) {
       ? index.inspectorWiring.byKey.get(target.key) : null;
     if (wired && wired.size) {
       dataBlock.inspectorWirings = [...wired].sort();
+      // 직렬화된 배선이 적어둔 타입 이름이 지금 이름과 다를 수 있다. 실측(2026-08-26):
+      // 3건이 `TempGameManager` 를 적어두고 있고 조인으로 `GameManager` 에 붙었다.
+      // 이름을 바꾸는 판단을 할 때 이건 알아야 한다 — 그 행들은 이미 낡은 이름을 들고 있다.
+      const stale = [];
+      for (const [, list] of index.inspectorWiring.byMethod) {
+        for (const w of list) {
+          if (!w || w.method !== target.method) continue;
+          if (w.type !== target.type) continue;
+          if (w.declaredType && w.declaredType !== w.type) {
+            stale.push({ asset: w.asset, declaredType: w.declaredType, resolvedType: w.type });
+          }
+        }
+      }
+      if (stale.length) {
+        dataBlock.staleDeclaredTypes = stale;
+        dataBlock.staleDeclaredTypeNote =
+          'These wirings store a type name that no longer matches the resolved type. They were ' +
+          'joined through the target asset, not the name. A rename decision should treat them as ' +
+          'already out of date.';
+      }
       dataBlock.inspectorWiringNote =
         'UnityEvent persistent calls stored in these assets. They never appear in the IL call ' +
         'graph. Renaming or removing the method breaks them silently — the Editor shows the row ' +
@@ -475,13 +495,53 @@ function buildImpact(index, args) {
       'guessed; other tools report the collision as ambiguousFullName.',
   };
 
+  // 무엇이 "깨지나" 는 **어떤 연산인가**에 달렸다. 같은 데이터가 연산에 따라 다르게 읽힌다:
+  // GUID 를 보존하는 이름 변경은 직렬화 참조 2건을 그대로 두고 코드의 경로 상수만 깨뜨리고,
+  // 메서드 본문 변경은 호출자 45개 파일 중 어느 것도 깨뜨리지 않는다.
+  // 그래서 축을 **출처**로 가른다 — 이름으로 가리키나(조용히 깨진다), GUID 로 가리키나
+  // (이름 변경·이동에 살아남는다), 컴파일러가 보나(즉시 잡힌다).
+  // 이건 Unity 의 동작을 실험한 결과가 아니라 **직렬화 형태에서 도출한 것**이고, 그렇게 적는다.
+  const present = k => !!out.summary.byAxis[k];
+  const byName = [];
+  const byGuid = [];
+  const byCompiler = [];
+  if (present('inspectorWirings')) byName.push('data.inspectorWirings (m_MethodName is a string)');
+  if (present('typeNameRefs')) byName.push('data.typeNameRefs (assembly-qualified name string)');
+  if (present('codePathLoads')) byName.push('code.pathLoads (asset path string in code)');
+  if (present('referencingAssets')) byGuid.push('assets.referencedBy (GUID)');
+  if (present('attachedAssets')) byGuid.push('assets.attachedTo (m_Script GUID)');
+  if (present('projectSettings')) byGuid.push('assets.projectSettings (GUID)');
+  if (present('textualMatches')) byGuid.push('assets.textualMatches (GUID written as text)');
+  if (present('codeCallers')) byCompiler.push('code.callers');
+  if (present('subclasses')) byCompiler.push('inheritance.transitiveSubclasses');
+  out.effectByOperation = {
+    rename: {
+      breaksSilently: byName,
+      caughtByCompiler: byCompiler,
+      survives: byGuid,
+    },
+    moveOrReimport: {
+      breaksSilently: byName.filter(x => /pathLoads/.test(x)),
+      survives: byGuid.concat(byName.filter(x => !/pathLoads/.test(x))),
+    },
+    delete: { breaks: byName.concat(byGuid).concat(byCompiler) },
+    changeBodyOnly: {
+      breaks: [],
+      note: 'no structural reference changes; behaviour changes for everything listed above',
+    },
+    basis: 'derived from how each axis points at the target (name string / GUID / compiled reference), ' +
+           'not from testing Unity behaviour. Verify before a large rename.',
+  };
+
   out.summary.impactedCount = impacted;
   out.note =
     'Axes are reported separately on purpose: a code caller, an Inspector wiring, a type-name ' +
     'string and a const-path load break in different ways and are fixed differently, so no single ' +
     'total is given. Zero on every axis is not proof that nothing breaks — read unknown. ' +
     'Transitive impact stops at the depth you asked for (default 1) except for the inheritance ' +
-    'closure, which is complete.';
+    'closure, which is complete. impactedCount counts things that depend on the target, which is ' +
+    'not the same as things that break: read effectByOperation before concluding that a rename or ' +
+    'a body change is dangerous.';
 
   return out;
 }
