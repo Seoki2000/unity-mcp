@@ -133,9 +133,63 @@ function collectFiles(roots) {
 const SNIFF_BYTES = 512;
 const MAX_TEXT_BYTES = 16 * 1024 * 1024;
 
-function scanOtherFiles(root, files, meta, refs, weak) {
+// 경로/키로 에셋을 부르는 코드. GUID 가 아니라 **문자열**이라 참조 인덱스에 안 잡힌다.
+//   Resources.Load("Prefabs/Foo")                       → Assets/**/Resources/Prefabs/Foo.*
+//   AssetDatabase.LoadAssetAtPath<T>("Assets/X.prefab")  → 그 경로 그대로
+//
+// "정적 인덱스가 원리적으로 못 보는 축" 이라고 문서에 적어 뒀지만, 다시 재보니 **상당 부분은
+// 볼 수 있었다.** 다만 리터럴만 봐서는 안 된다 — 실측(MainProject): 로드 호출 71개 중
+// **인라인 리터럴은 1개뿐**이고 나머지는 경로를 `const string` 에 두고 이름으로 부른다:
+//     AssetDatabase.LoadAssetAtPath<GameObject>(MainCameraPrefabPath)
+//     AssetDatabase.LoadAssetAtPath<GameObject>(EntryFolder + "/FX_Hit_Spark.prefab")
+// 그래서 같은 파일의 문자열 상수를 접어서 푼다. 그러자 엣지 23개가 살아났다
+// (보스 프리팹, Global Volume Profile, 셰이더 — 전부 에디터 오서링 스크립트가 부르는 것).
+//
+// 런타임에 조립되는 것(`GUIDToAssetPath(guids[i])`, 매개변수)은 여전히 불가능하다.
+// 44건이 그렇고, 그 수를 응답에 실어 "못 본 몫" 을 드러낸다.
+const CONST_STRING_RE = /(?:const|static\s+readonly)\s+string\s+([A-Za-z_]\w*)\s*=\s*"([^"\r\n]*)"/g;
+const LOAD_CALL_RE = /(?:Resources\s*\.\s*Load(?:All|Async)?|AssetDatabase\s*\.\s*Load(?:AssetAtPath|MainAssetAtPath|AllAssetsAtPath|AllAssetRepresentationsAtPath))\s*(?:<[^>()]*>)?\s*\(([^;)]*)\)/g;
+
+/**
+ * 로드 호출의 인자 식을 문자열로 접는다. `"a" + Const + "b"` 까지만 다룬다.
+ * 못 접으면 null — 그건 세어서 드러낸다.
+ */
+function foldPathExpression(expr, consts) {
+  const parts = String(expr).split('+');
+  let out = '';
+  for (let raw of parts) {
+    const t = raw.trim();
+    if (!t) return null;
+    if (t.length >= 2 && t[0] === '"' && t[t.length - 1] === '"') { out += t.slice(1, -1); continue; }
+    if (/^[A-Za-z_]\w*$/.test(t) && consts.has(t)) { out += consts.get(t); continue; }
+    return null;   // 변수·메서드 호출·인덱싱 — 정적으로는 알 수 없다
+  }
+  return out || null;
+}
+
+/** `Assets/**\/Resources/<key>.<ext>` 를 key -> 경로들 로. Resources.Load 의 인자가 그 key 다. */
+function buildResourcesMap(root, fileLists) {
+  const byKey = new Map();
+  for (const list of fileLists) {
+    for (const f of list) {
+      const p = rel(root, f);
+      const i = p.lastIndexOf('/Resources/');
+      if (i === -1) continue;
+      if (p.endsWith('.meta')) continue;
+      const after = p.slice(i + '/Resources/'.length);
+      const key = after.replace(/\.[^./]+$/, '');
+      let arr = byKey.get(key.toLowerCase());
+      if (!arr) byKey.set(key.toLowerCase(), arr = []);
+      arr.push(p);
+    }
+  }
+  return byKey;
+}
+
+function scanOtherFiles(root, files, meta, refs, weak, resourcesMap) {
   const t0 = Date.now();
   let sniffed = 0, textFiles = 0, binaryFiles = 0, largeFiles = 0, bytes = 0, edges = 0;
+  let pathLoadEdges = 0, pathLoadResolved = 0, pathLoadUnresolved = 0, dynamicLoads = 0;
   const buf = Buffer.allocUnsafe(SNIFF_BYTES);
 
   for (const f of files) {
@@ -181,9 +235,48 @@ function scanOtherFiles(root, files, meta, refs, weak) {
       if (!w) weak.set(g, w = new Set());
       w.add(assetPath);
     }
+
+    // 경로/키 로드는 소스 파일에서만 의미가 있다.
+    if (resourcesMap && /\.cs$/i.test(assetPath)) {
+      const addEdge = (targetPath) => {
+        const g = meta.pathToGuid.get(targetPath);
+        if (!g) return false;
+        let set = refs.get(g);
+        if (!set) refs.set(g, set = new Set());
+        if (!set.has(assetPath)) { set.add(assetPath); pathLoadEdges++; }
+        return true;
+      };
+
+      // 같은 파일의 문자열 상수를 먼저 모은다.
+      const consts = new Map();
+      CONST_STRING_RE.lastIndex = 0;
+      let cm;
+      while ((cm = CONST_STRING_RE.exec(text)) !== null) consts.set(cm[1], cm[2]);
+
+      const isResourcesCall = /Resources\s*\.\s*Load/;
+      let mm;
+      LOAD_CALL_RE.lastIndex = 0;
+      while ((mm = LOAD_CALL_RE.exec(text)) !== null) {
+        const folded = foldPathExpression(mm[1], consts);
+        if (folded === null) { dynamicLoads++; continue; }
+        const value = folded.replace(/\\/g, '/');
+
+        let hit = false;
+        if (isResourcesCall.test(mm[0])) {
+          // Resources.Load 의 인자는 확장자 없는 키다.
+          const hits = resourcesMap.get(value.toLowerCase());
+          if (hits) for (const h of hits) { addEdge(h); hit = true; }
+        } else {
+          hit = addEdge(value);
+        }
+        if (hit) pathLoadResolved++; else pathLoadUnresolved++;
+      }
+    }
   }
 
-  return { sniffed, textFiles, binaryFiles, largeFiles, bytes, edges, ms: Date.now() - t0 };
+  return { sniffed, textFiles, binaryFiles, largeFiles, bytes, edges,
+           pathLoadEdges, pathLoadResolved, pathLoadUnresolved, dynamicLoads,
+           ms: Date.now() - t0 };
 }
 
 /**
@@ -419,7 +512,8 @@ function buildIndex(root, opts = {}) {
 
   // 확장자 목록 밖 텍스트 파일(.shadergraph/.asmdef/.cs 등)에서도 참조를 찾는다.
   const weakRefs = new Map();
-  const other = scanOtherFiles(root, assetFiles.others, meta, yaml.refs, weakRefs);
+  const resourcesMap = buildResourcesMap(root, [assetFiles.others, assetFiles.yamls]);
+  const other = scanOtherFiles(root, assetFiles.others, meta, yaml.refs, weakRefs, resourcesMap);
 
   let edges = 0;
   for (const s of yaml.refs.values()) edges += s.size;
@@ -460,6 +554,12 @@ function buildIndex(root, opts = {}) {
       otherBinarySkipped: other.binaryFiles,
       otherLargeSkipped: other.largeFiles,
       otherRefEdges: other.edges,
+      // 코드가 경로/키로 부르는 에셋. 리터럴만 해석된다 — 조립된 경로는 dynamicLoadSites 로 센다.
+      pathLoadEdges: other.pathLoadEdges,
+      pathLoadResolved: other.pathLoadResolved,
+      pathLoadUnresolved: other.pathLoadUnresolved,
+      dynamicLoadSites: other.dynamicLoads,
+      resourcesKeys: resourcesMap.size,
       msOther: other.ms,
       bytesParsed: yaml.bytesParsed,
       filesFailed: yaml.filesFailed,

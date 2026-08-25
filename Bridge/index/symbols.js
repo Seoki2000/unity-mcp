@@ -107,6 +107,56 @@ function readPdbMethodDocuments(pdbPath) {
   return methodDoc;
 }
 
+// 메서드에 붙은 속성을 읽는다 — "호출자 0" 의 뜻을 바꾸는 정보다.
+//
+// `[MenuItem]`, `[RuntimeInitializeOnLoadMethod]`, `[Test]` 가 붙은 메서드는 **코드 호출자가
+// 0 인 것이 정상**이다. 에디터나 테스트 러너가 부르기 때문이다. 그걸 모르면 호출 그래프의
+// 0 이 "죽은 코드" 로 읽힌다. 실측(MainProject): MenuItem 87 / ContextMenu 19 /
+// RuntimeInitializeOnLoadMethod 6 — 112개 지점이 이 상태다.
+//
+// 어떤 속성이 "진입점" 인지는 원리적으로 알 수 없다(프레임워크마다 다르다).
+// 그래서 판정하지 않고 **붙어 있는 속성을 그대로 보고한다.** 판단은 읽는 쪽이 한다.
+// 다만 컴파일러가 자동으로 다는 표식은 신호가 아니라 잡음이라 뺀다.
+const NOISE_ATTRIBUTE_RE = /^(System\.Runtime\.CompilerServices\.|System\.Diagnostics\.|System\.Reflection\.)/;
+
+/** MethodDef 행 번호 -> 그 메서드에 붙은 속성 타입 이름들. */
+function readMethodAttributes(md) {
+  const byMethodRow = new Map();
+  const rows = md.rows(0x0C);
+  if (!rows) return byMethodRow;
+
+  for (let r = 1; r <= rows; r++) {
+    // Parent: HasCustomAttribute 코드화 인덱스(5비트 태그). 태그 0 = MethodDef.
+    const parent = md.readCol(0x0C, r, 0);
+    if ((parent & 0x1F) !== 0) continue;
+    const methodRow = parent >>> 5;
+    if (!methodRow) continue;
+
+    // Type: CustomAttributeType(3비트). 2 = MethodDef(같은 어셈블리), 3 = MemberRef(외부).
+    const type = md.readCol(0x0C, r, 1);
+    const tag = type & 0x7;
+    const row = type >>> 3;
+    let name = null;
+
+    if (tag === 3 && row) {
+      // MemberRef.Class -> MemberRefParent(3비트). 1 = TypeRef.
+      const cls = md.readCol(0x0A, row, 0);
+      if ((cls & 0x7) === 1) {
+        const cr = cls >>> 3;
+        const ns = md.getString(md.readCol(0x01, cr, 2));
+        const nm = md.getString(md.readCol(0x01, cr, 1));
+        name = ns ? `${ns}.${nm}` : nm;
+      }
+    }
+    if (!name || NOISE_ATTRIBUTE_RE.test(name)) continue;
+
+    let list = byMethodRow.get(methodRow);
+    if (!list) byMethodRow.set(methodRow, list = []);
+    if (!list.includes(name)) list.push(name);
+  }
+  return byMethodRow;
+}
+
 /**
  * 어셈블리 하나를 읽어 타입/멤버와 소스 매핑을 만든다.
  */
@@ -122,6 +172,8 @@ function readAssembly(root, dllPath) {
     try { methodDoc = readPdbMethodDocuments(pdbPath); }
     catch (e) { methodDoc = null; }
   }
+
+  const methodAttrs = readMethodAttributes(md);
 
   const types = [];
   const typeRows = md.rows(0x02);
@@ -153,12 +205,15 @@ function readAssembly(root, dllPath) {
     const docs = new Set();
     for (let mi = methodRange.start; mi <= methodRange.end && mi >= 1; mi++) {
       const mf = md.readCol(0x06, mi, 2);
+      const attrs = methodAttrs.get(mi);
       methods.push({
         name: md.getString(md.readCol(0x06, mi, 3)),
         isPublic: (mf & METHOD_ACCESS_MASK) === METHOD_PUBLIC,
         isStatic: !!(mf & METHOD_STATIC),
         isVirtual: !!(mf & METHOD_VIRTUAL),
         isAbstract: !!(mf & METHOD_ABSTRACT),
+        // 속성은 있을 때만 싣는다(대부분의 메서드에는 없다).
+        ...(attrs && attrs.length ? { attributes: attrs } : {}),
         row: mi,
       });
       if (methodDoc) {

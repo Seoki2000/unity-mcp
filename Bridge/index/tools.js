@@ -76,7 +76,8 @@ function cachePath(root) {
 //    기존 캐시가 옛 엣지(6,021)를 계속 서빙하고, 고친 오답이 그대로 남는다.
 // 7: 레이어 D 추가 — 인스펙터 배선 + 타입 이름 문자열 참조.
 //    캐시에 없으면 캐시로 뜬 세션에서 통째로 사라진다.
-const CACHE_VERSION = 7;
+// 8: 메서드 속성(CustomAttribute) 수집. 구 캐시에는 없어 진입점이 안 보인다.
+const CACHE_VERSION = 8;
 
 function saveCache(index) {
   try {

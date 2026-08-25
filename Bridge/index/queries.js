@@ -242,13 +242,17 @@ function findReferences(index, args) {
         otherTextFiles: index.stats.otherTextFiles,
         binaryFilesSkipped: index.stats.otherBinarySkipped,
         largeTextFilesSkipped: index.stats.otherLargeSkipped,
+        // 코드가 경로로 부르는 것 중 정적으로 못 푼 호출 수. 이 에셋이 그중 하나일 수 있다.
+        unresolvableDynamicLoadSites: index.stats.dynamicLoadSites,
       } : null,
       note: 'totalCount is 0. This index scans every *text* file under Assets for GUID references — ' +
             'the serialized asset types, .meta importer settings, and any other file whose first bytes ' +
             'contain no NUL (shader graphs, asmdefs, source, docs). What it still cannot see: references ' +
             'inside binary files (skipped by content sniffing), text files over 16 MB, and references ' +
-            'that never store the GUID at all — Resources.Load("path"), Addressables addresses, or any ' +
-            'path assembled at run time. Those are invisible to any static index. ' +
+            'assembled at run time. Literal and const-folded paths ARE resolved (Resources.Load and ' +
+            'AssetDatabase.LoadAssetAtPath), but a path built from a variable is not — ' +
+            'unresolvableDynamicLoadSites says how many such call sites exist in this project. ' +
+            'Addressables addresses are also not mapped yet. ' +
             'Cross-check with unity_search_project (searchType=reference) as a second opinion, but note ' +
             'that neither source is complete: measured 2026-08-23, Unity AssetDatabase.GetDependencies ' +
             'does NOT report VFX Graph internal references. Treat a zero from either side as unproven, ' +
@@ -452,6 +456,24 @@ function inspectorWiringsFor(index, key, methodName) {
   return out;
 }
 
+/**
+ * 이 메서드에 붙은 속성. `[MenuItem]`/`[ClientRpc]`/`[Test]` 처럼 **코드 호출자 없이도
+ * 불리는** 진입점을 드러낸다 — 그 경우 "호출자 0" 은 죽었다는 뜻이 아니다.
+ * 어떤 속성이 진입점인지 판정하지 않는다. 붙어 있는 것을 그대로 낸다.
+ */
+function methodAttributesFor(index, typeName, methodName) {
+  const sym = index.symbols;
+  if (!sym) return [];
+  const info = sym.typeByFullName.get(typeName);
+  if (!info || !info.methods) return [];
+  const out = [];
+  for (const m of info.methods) {
+    if (m.name !== methodName || !m.attributes) continue;
+    for (const a of m.attributes) if (!out.includes(a)) out.push(a);
+  }
+  return out;
+}
+
 function findCallers(index, args) {
   const r = resolveMethodKey(index, args.method);
   if (r.error) return r;
@@ -461,7 +483,9 @@ function findCallers(index, args) {
   const page = pageOf(callers, args.offset, args.maxResults);
 
   const methodName = r.key.slice(r.key.indexOf('::') + 2);
+  const typeName = r.key.slice(0, r.key.indexOf('::'));
   const wirings = inspectorWiringsFor(index, r.key, methodName);
+  const attributes = methodAttributesFor(index, typeName, methodName);
 
   return {
     method: r.key,
@@ -481,12 +505,20 @@ function findCallers(index, args) {
         'call graph. Renaming or removing this method breaks them silently — the Editor shows the row as ' +
         '<Missing> only when someone opens that object.',
     } : {}),
+    // 이 메서드에 붙은 속성. 진입점 여부를 판정하지 않고 그대로 낸다.
+    ...(attributes.length ? {
+      attributes,
+      attributeNote: 'Attributes can make a method reachable with no code caller — the Editor calls ' +
+        '[MenuItem]/[ContextMenu], the runtime calls [RuntimeInitializeOnLoadMethod], the test runner ' +
+        'calls [Test], and Netcode generates the call for [ServerRpc]/[ClientRpc]. Read the list before ' +
+        'concluding anything from a caller count of zero.',
+    } : {}),
     note: 'Overloads share one key (Type::Method), so callers of all overloads are merged. ' +
           'Only calls from project (user assembly) code are indexed.' +
-          (page.total === 0 && !wirings.length && index.inspectorWiring
-            ? ' No code callers and no Inspector wiring were found — but a method can still be reached by ' +
-              'reflection, by an attribute-driven entry point (MenuItem, RuntimeInitializeOnLoadMethod), ' +
-              'or by a framework that instantiates its declaring type by name. Zero is not proof it is dead.'
+          (page.total === 0 && !wirings.length && !attributes.length && index.inspectorWiring
+            ? ' No code callers, no Inspector wiring and no attributes were found — but a method can still ' +
+              'be reached by reflection, or by a framework that instantiates its declaring type by name. ' +
+              'Zero is not proof it is dead.'
             : ''),
   };
 }
