@@ -39,6 +39,64 @@ let _meta = { builtAt: null, fromCache: false };
 let _projectRoot = null;
 let _buildError = null;
 
+// ── 신선도 ────────────────────────────────────────────────────────
+//
+// 여기 있던 `if (_index && !force) return _index;` 는 **한 번 메모리에 올라간 인덱스를
+// 세션 내내 다시 검증하지 않았다.** 디스크 지문 대조는 loadCache() 안에 있는데 그건
+// _index 가 null 일 때만 실행되므로, 브릿지 프로세스당 딱 한 번 돌았다.
+// 결과: 브릿지가 붙은 채로 Unity 에서 재컴파일하면 인덱스 도구 11개 전부가
+// **컴파일 이전 그래프**로 답했다. da98185 에서 만든 낡음 감지가 핫패스에서 통째로 건너뛰어졌다.
+// §4-(21) 과 같은 형태다 — 장치는 있는데 실제 응답 경로에 안 실려 있었다.
+//
+// 두 단으로 나눈 이유는 비용이다(실측):
+//   어셈블리 서명  378 파일 /  15~18 ms → 매번. 심볼·호출그래프의 출처이고 재컴파일을 잡는다
+//   전체 에셋 지문 5,825 파일 / 690 ms → throttle. 안 그러면 웜 48 ms 질의가 죽는다
+const ASSET_RECHECK_INTERVAL_MS = Number(process.env.UNITY_MCP_ASSET_RECHECK_MS || 10000);
+
+let _asmSig = null;            // 인덱스를 만들/올릴 때의 어셈블리 서명
+let _validatedAt = null;       // 마지막으로 디스크와 대조가 끝난 시각
+let _lastAssetCheckAt = 0;     // 마지막 전체 지문 대조 시각
+let _revalidations = 0;        // 재검증 횟수(프로브가 본다)
+let _staleReason = null;       // 마지막으로 인덱스를 버린 이유
+
+/** 메모리의 인덱스가 아직 디스크와 같은 세대인가. 아니면 버릴 이유를 돌려준다. */
+function stalenessReason(root) {
+  const nowSig = scan.assemblySignature(root);
+  if (!scan.sameAssemblySignature(nowSig, _asmSig)) {
+    return `assemblies changed (files ${_asmSig ? _asmSig.files : '?'}->${nowSig.files}, ` +
+           `hash ${_asmSig ? _asmSig.hash : '?'}->${nowSig.hash})`;
+  }
+  const now = Date.now();
+  if (now - _lastAssetCheckAt >= ASSET_RECHECK_INTERVAL_MS) {
+    _lastAssetCheckAt = now;
+    if (_index && _index.fingerprint) {
+      const nowFp = scan.fingerprint(root, { includePackageCache: !!_index.includePackageCache });
+      const old = _index.fingerprint;
+      if (nowFp.metaFiles !== old.metaFiles || nowFp.yamlFiles !== old.yamlFiles ||
+          nowFp.totalBytes !== old.totalBytes || nowFp.hash !== old.hash) {
+        return `assets changed (yaml ${old.yamlFiles}->${nowFp.yamlFiles}, hash ${old.hash}->${nowFp.hash})`;
+      }
+    }
+  }
+  return null;
+}
+
+/** 테스트 시임 — 프로브가 "낡은 채로 서빙하지 않는다" 를 재현할 때 쓴다. */
+function _forceStaleForTest() {
+  _asmSig = { files: -1, maxMtimeMs: 0, totalBytes: 0, hash: 0, missing: false };
+}
+function _freshness() {
+  return {
+    validatedAt: _validatedAt,
+    revalidations: _revalidations,
+    staleReason: _staleReason,
+    assembliesMaxMtime: _asmSig ? new Date(_asmSig.maxMtimeMs).toISOString() : null,
+    assembliesFiles: _asmSig ? _asmSig.files : null,
+    assetCheckIntervalMs: ASSET_RECHECK_INTERVAL_MS,
+  };
+}
+function _projectRootForTest() { return _projectRoot; }
+
 /** 이 이름을 브릿지가 로컬에서 처리하는가. */
 function isLocalTool(name) {
   return LOCAL_TOOL_NAMES.has(name);
@@ -260,7 +318,16 @@ function log(msg) { _log(`[index] ${msg}`); }
  * @param {boolean} force 캐시를 무시하고 다시 빌드
  */
 function ensureIndex(port, force, includePackageCache, cacheOnly) {
-  if (_index && !force) return _index;
+  // 메모리에 있어도 **그냥 돌려주지 않는다.** 디스크와 같은 세대인지 먼저 본다.
+  if (_index && !force) {
+    const reason = _projectRoot ? stalenessReason(_projectRoot) : null;
+    if (!reason) { _validatedAt = new Date().toISOString(); return _index; }
+    log(`in-memory index stale — dropping (${reason})`);
+    _staleReason = reason;
+    _revalidations++;
+    _index = null;          // 아래 로드/재빌드 경로로 떨어뜨린다
+    _meta = { builtAt: null, fromCache: false };
+  }
 
   if (!_projectRoot) _projectRoot = resolveProjectRoot(port);
   if (!_projectRoot) {
@@ -280,6 +347,9 @@ function ensureIndex(port, force, includePackageCache, cacheOnly) {
     if (cached) {
       _index = cached;
       _meta = { builtAt: cached._builtAt, fromCache: true };
+      _asmSig = scan.assemblySignature(_projectRoot);
+      _validatedAt = new Date().toISOString();
+      _lastAssetCheckAt = Date.now();   // 방금 loadCache 가 전체 지문을 대조했다
       log(`loaded from cache (${cached.stats.yamlFiles} yaml files, built ${cached._builtAt})`);
       return _index;
     }
@@ -291,6 +361,9 @@ function ensureIndex(port, force, includePackageCache, cacheOnly) {
   }
 
   log(`building index for ${_projectRoot}${includePackageCache ? ' (+PackageCache)' : ''}...`);
+  // 서명을 **빌드 전에** 찍는다. 빌드 도중 재컴파일이 나면 우리가 읽은 어셈블리가 섞인
+  // 것이므로, 다음 호출에서 낡음으로 잡혀 다시 빌드되는 쪽이 맞다.
+  _asmSig = scan.assemblySignature(_projectRoot);
   _index = scan.buildIndex(_projectRoot, { includePackageCache: !!includePackageCache });
   log(`layer A built in ${_index.stats.msTotal}ms — ${_index.stats.guids} guids, ` +
       `${_index.stats.referenceEdges} edges, ${_index.stats.scriptGuids} script guids`);
@@ -345,6 +418,10 @@ function ensureIndex(port, force, includePackageCache, cacheOnly) {
 
   _meta = { builtAt: new Date().toISOString(), fromCache: false };
   _buildError = null;
+  // 신규 빌드 경로에서도 신선도 상태를 남긴다. 안 하면 _asmSig 가 null 로 남아
+  // 다음 호출마다 "낡음" 으로 판정돼 **매 호출 재빌드**에 빠진다.
+  _validatedAt = new Date().toISOString();
+  _lastAssetCheckAt = Date.now();
   saveCache(_index);
   return _index;
 }
@@ -517,7 +594,7 @@ function callLocalTool(name, args, port) {
         error: _buildError || undefined,
       });
     }
-    return ok({ ...queries.status(idx, _meta), cacheAvailable: true });
+    return ok({ ...queries.status(idx, _meta), cacheAvailable: true, freshness: _freshness() });
   }
 
   if (name === 'unity_index_rebuild') {
@@ -569,4 +646,5 @@ function errWith(obj) {
   return { content: [{ type: 'text', text: JSON.stringify(obj) }], isError: true };
 }
 
-module.exports = { isLocalTool, toolDefinitions, callLocalTool, ensureIndex, setLogger, PREFIX };
+module.exports = { isLocalTool, toolDefinitions, callLocalTool, ensureIndex, setLogger, PREFIX,
+  _freshness, _forceStaleForTest, _projectRoot: _projectRootForTest };

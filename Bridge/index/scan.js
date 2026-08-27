@@ -430,6 +430,43 @@ function foldFile(mtimeMs, size) {
   return x;
 }
 
+/**
+ * 컴파일 산출물(`Library/ScriptAssemblies`)의 서명.
+ *
+ * 왜 전체 지문과 따로 두는가 — fingerprint() 는 5,825 파일을 stat 해서 실측 **약 690 ms** 다.
+ * 웜 질의가 48 ms 이므로 매 호출에 붙일 수 없다. 그런데 심볼·호출그래프 레이어는
+ * 오직 이 디렉터리의 DLL/PDB 에서 나오고, 그게 낡는 사건은 **재컴파일** 하나다.
+ * 여기만 보면 378 파일 / 실측 **15 ms** 라 매 호출에 붙일 수 있다.
+ *
+ * 에셋 쪽 낡음은 이걸로 안 잡힌다 — 그건 throttle 된 fingerprint() 가 맡는다.
+ */
+function assemblySignature(root) {
+  const dir = path.join(root, 'Library', 'ScriptAssemblies');
+  let names;
+  try { names = fs.readdirSync(dir); }
+  catch { return { files: 0, maxMtimeMs: 0, totalBytes: 0, hash: 0, missing: true }; }
+
+  let maxMtimeMs = 0, totalBytes = 0, files = 0, hash = 0;
+  for (const n of names) {
+    try {
+      const st = fs.statSync(path.join(dir, n));
+      if (!st.isFile()) continue;
+      if (st.mtimeMs > maxMtimeMs) maxMtimeMs = st.mtimeMs;
+      totalBytes += st.size;
+      hash = (hash + foldFile(st.mtimeMs, st.size)) | 0;
+      files++;
+    } catch { /* 사라진 파일 — files 개수 차이로 잡힌다 */ }
+  }
+  return { files, maxMtimeMs: Math.round(maxMtimeMs), totalBytes, hash, missing: false };
+}
+
+/** 두 서명이 같은 컴파일 세대인가. 어느 쪽이라도 없으면 "모른다" 이므로 다르다고 본다. */
+function sameAssemblySignature(a, b) {
+  if (!a || !b) return false;
+  return a.files === b.files && a.totalBytes === b.totalBytes &&
+         a.hash === b.hash && a.maxMtimeMs === b.maxMtimeMs;
+}
+
 function fingerprintFrom(metaFiles, yamlFiles, otherFiles) {
   let maxMtimeMs = 0;
   let totalBytes = 0;
@@ -623,5 +660,5 @@ function mergePackageCacheGuids(index) {
 
 module.exports = {
   buildIndex, collectFiles, buildMetaIndex, buildYamlIndex, mergePackageCacheGuids,
-  fingerprint, fingerprintFrom, YAML_EXT, rel,
+  fingerprint, fingerprintFrom, assemblySignature, sameAssemblySignature, YAML_EXT, rel,
 };
