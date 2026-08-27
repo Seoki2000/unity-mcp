@@ -220,7 +220,6 @@ dotnet build-server shutdown
 | 3-P0 교차검증 | `1102330` `53e0bf3` | 라이브 대조군(예상 5/5 적중) + `find_references` 타입이름 축 오답 38건 수정 |
 | 3-P1 | `95872ad` | `unity_project_map` — 배치·진입점 지도. 중심성 랭킹 기각(측정), 인수 프로브 6/7 |
 | 3-P2 | `25144ca` `5bf9382` `f75cf7c` | `unity_impact_analysis` — 축 9개를 합치지 않고 + `unknown`. 프로브 10/10. 동반 수정: ProjectSettings 스캔 / 캐시 중복 타입 / 없는 대상 / `find_callers` 리졸버 / `effectByOperation` |
-
 | 3-P3a | `8f80fce` `1d294f2` `0a32e82` `cdf0709` | 인덱스 신선도 재검증 + 컴파일 진단 완결성 + 콘솔 절단 회계 + 오류 출처. **새 도구 0개, `tools/list` 불변**. 프로브 7/7 |
 
 ### 인덱스 성능 (MainProject, Unity 6000.3.16f1) — 2026-08-24 재측정
