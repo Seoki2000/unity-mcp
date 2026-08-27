@@ -50,8 +50,13 @@ namespace Community.Unity.MCP
                     }
                     break;
                 case "reference":
-                    ambiguityNote = SearchByReference(args.query, results, maxResults);
+                {
+                    string refusal;
+                    ambiguityNote = SearchByReference(args.query, searchPath, results, maxResults, out refusal);
+                    // 스코프가 너무 넓으면 30초를 태우고 -32603 으로 죽는 대신 즉시 대안을 말한다.
+                    if (refusal != null) return new McpToolError { error = refusal };
                     break;
+                }
                 default:
                     return new McpToolError { error = $"Unknown search type: {searchType}. Valid types: name, content, reference" };
             }
@@ -61,6 +66,8 @@ namespace Community.Unity.MCP
                 query = args.query,
                 searchType = searchType,
                 folder = searchPath,
+                // 0 건일 때 무엇을 훑고 0 인지 말한다. folder 는 이제 실제로 지켜진다.
+                scannedAssetCount = _lastScannedCount,
                 resultCount = results.Count,
                 truncated = results.Count >= maxResults,
                 note = ambiguityNote,
@@ -222,8 +229,19 @@ namespace Community.Unity.MCP
         ///    동명 에셋이 둘 이상이면 어느 것을 봤는지 알리지도 않고 엉뚱한 답을 냈다.
         ///    이제 정확한 경로/GUID 를 우선 해석하고, 여전히 모호하면 후보를 돌려줘 호출자가 고르게 한다.
         /// </summary>
-        private static string SearchByReference(string query, List<SearchResult> results, int maxResults)
+        // 이 프로젝트 실측(2026-08-25 / 재확인 2026-08-27): 전수 대상 에셋 24,233 경로,
+        // 콜드 41초. 에디터 큐 캡이 30초라 **먼저 끊기는 것은 브릿지가 아니라 큐**이고
+        // `-32603 Request timeout` 이 올라온다(작업 자체는 백그라운드에서 완주한다).
+        // 그래서 상한을 넘는 스코프는 시도하지 않고 대안을 말한다.
+        private const int ReferenceScanLimit = 8000;
+
+        // 마지막 reference 스캔이 실제로 훑은 에셋 수. 0 건 응답의 근거로 싣는다.
+        [ThreadStatic] private static int _lastScannedCount;
+
+        private static string SearchByReference(string query, string folder, List<SearchResult> results,
+                                                int maxResults, out string refusal)
         {
+            refusal = null;
             string targetPath = null;
             string ambiguity = null;
 
@@ -270,9 +288,50 @@ namespace Community.Unity.MCP
                 targetPath = paths[0];
             }
             
-            // Search for references to this asset
-            string[] allAssets = AssetDatabase.GetAllAssetPaths();
-            
+            // Search for references to this asset.
+            //
+            // ⚠️ 여기가 `folder` 파라미터를 무시하던 자리다. `GetAllAssetPaths()` 를 그대로 돌면서
+            // 응답에는 `folder` 를 echo 해서, 스코프를 좁힌 줄 알고 읽게 만들었다.
+            // 실측(2026-08-27): folder=Assets/50.Art, maxResults=5 로 불러도 전체를 훑고 31초에 타임아웃.
+            // 무시되는 파라미터가 곧 타임아웃의 원인이었다.
+            var scoped = new List<string>();
+            var prefix = string.IsNullOrEmpty(folder) ? "Assets" : folder.Replace(Path.DirectorySeparatorChar, '/').TrimEnd('/');
+            foreach (var p in AssetDatabase.GetAllAssetPaths())
+            {
+                if (p == null) continue;
+                if (p.Length == prefix.Length ? string.Equals(p, prefix, StringComparison.OrdinalIgnoreCase)
+                                              : p.StartsWith(prefix + "/", StringComparison.OrdinalIgnoreCase))
+                    scoped.Add(p);
+            }
+
+            // 스코프가 아무것도 안 잡으면 그건 "참조 0" 이 아니라 **folder 가 틀린 것**이다.
+            // 0 을 돌려주면 "아무도 안 쓴다" 로 읽힌다 — §4-(24)-1 과 같은 형태다.
+            // 실측으로 걸렸다: folder='Library/PackageCache' 가 0건을 답했는데,
+            // GetAllAssetPaths() 는 패키지 에셋을 **`Packages/...`** 로 내지 Library 경로로 내지 않는다.
+            if (scoped.Count == 0)
+            {
+                refusal = $"folder '{prefix}' matched no assets in the AssetDatabase, so this is not a " +
+                          $"'no references' answer - nothing was scanned. Note that package assets appear " +
+                          $"under 'Packages/<id>/...', not 'Library/PackageCache/...'. Pass a folder that " +
+                          $"exists in the AssetDatabase, or omit it to scan all of Assets.";
+                return null;
+            }
+
+            if (scoped.Count > ReferenceScanLimit)
+            {
+                refusal = $"Refusing to scan {scoped.Count} assets under '{prefix}' — this calls " +
+                          $"AssetDatabase.GetDependencies on every one of them and exceeds the editor's " +
+                          $"30-second main-thread queue (measured: 24,233 assets, 41s cold, request dies " +
+                          $"with -32603 while the work keeps running). Two ways forward: narrow 'folder' to " +
+                          $"under {ReferenceScanLimit} assets, or use unity_find_references, which answers the " +
+                          $"same question from the bridge's reverse GUID index in O(1), needs no editor " +
+                          $"round-trip, and reports what it could not scan.";
+                return null;
+            }
+
+            _lastScannedCount = scoped.Count;
+            string[] allAssets = scoped.ToArray();
+
             foreach (var assetPath in allAssets)
             {
                 if (results.Count >= maxResults) break;
@@ -383,6 +442,7 @@ namespace Community.Unity.MCP
             public string query;
             public string searchType;
             public string folder;
+            public int scannedAssetCount;
             public int resultCount;
             public bool truncated;
             public string note;          // 모호한 reference 질의 등에 대한 경고
