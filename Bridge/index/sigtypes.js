@@ -146,4 +146,45 @@ function decodeFieldSig(blob, resolveCoded) {
   }
 }
 
-module.exports = { decodeFieldSig, readType, uint, ET, PRIMITIVE };
+/**
+ * MethodDefSig / MethodRefSig 를 디코딩한다 (II.23.2.1 / II.23.2.2).
+ *
+ *   conv [GenParamCount] ParamCount RetType Param*
+ *
+ * conv 의 0x10 이 GENERIC 이면 제네릭 인자 수가 먼저 온다. VARARG 호출부에는 파라미터
+ * 목록 중간에 SENTINEL(0x41) 이 낀다.
+ *
+ * 오버로드 구분에 필요한 것은 **파라미터 타입 목록**이다. C# 은 반환 타입으로
+ * 오버로드하지 않으므로 키에는 파라미터만 쓴다.
+ *
+ * 실패하면 null. 파라미터 하나를 못 그리면 그 자리에 `?` 가 들어간다 —
+ * 실측(2026-08-27): MethodDef 178,574개 중 `?` 포함 225개(0.13%),
+ * MemberRef 123,720개 중 11,038개(8.9%). `?` 가 있는 키는 정의 쪽과 맞출 수 없으므로
+ * 호출부에서는 **미해석으로 세고 시그니처 그래프에 넣지 않는다.**
+ */
+function decodeMethodSig(blob, resolveCoded) {
+  if (!blob || !blob.length) return null;
+  try {
+    const st = { p: 0 };
+    const conv = blob[st.p++];
+    if (conv & 0x10) uint(blob, st);            // GENERIC -> GenParamCount
+    const paramCount = uint(blob, st);
+    const ret = readType(blob, st, resolveCoded, 0);
+    const params = [];
+    for (let i = 0; i < paramCount; i++) {
+      if (blob[st.p] === ET.SENTINEL) { st.p += 1; params.push('...'); continue; }
+      const t = readType(blob, st, resolveCoded, 0);
+      params.push(t === null ? '?' : t);
+    }
+    return { params, ret, generic: !!(conv & 0x10), hasThis: !!(conv & 0x20) };
+  } catch {
+    return null;
+  }
+}
+
+/** `Type::Method(int,string)` 형태의 키를 만든다. 공백 없이 — 키는 사람이 아니라 맵이 읽는다. */
+function methodSigKey(typeFull, methodName, params) {
+  return typeFull + '::' + methodName + '(' + params.join(',') + ')';
+}
+
+module.exports = { decodeFieldSig, decodeMethodSig, methodSigKey, readType, uint, ET, PRIMITIVE };

@@ -17,6 +17,7 @@
 
 const path = require('path');
 const clr = require('./clrmeta');
+const sigtypes = require('./sigtypes');
 
 // ── 단일 바이트 옵코드의 오퍼랜드 크기. 없는 값은 '미지'로 취급해 중단한다.
 // -1 은 switch(4 + 4*n) 처리.
@@ -118,30 +119,44 @@ function token(t) { return { table: (t >>> 24) & 0xFF, row: t & 0xFFFFFF }; }
  * 호출 대상 토큰을 "Type::Method" 로 해석한다.
  * 해석 불가(외부 어셈블리 등)면 null.
  */
-function resolveCallTarget(md, tok, typeOfMethodRow) {
+function resolveCallTarget(md, tok, typeOfMethodRow, resolveCoded) {
   const { table, row } = token(tok);
   if (!row) return null;
+
+  // 오버로드를 가르려면 파라미터 타입이 필요하다. MethodDef 는 4번 컬럼,
+  // MemberRef 는 2번 컬럼이 시그니처 blob 이다. 못 그리면 params: null 로 남기고
+  // 호출부가 **미해석으로 센다** - 추측해서 아무 오버로드에 붙이면 안 된다.
+  const paramsOf = (blob) => {
+    if (!resolveCoded) return null;
+    const d = sigtypes.decodeMethodSig(blob, resolveCoded);
+    if (!d || !Array.isArray(d.params)) return null;
+    if (d.params.some(x => x === '?')) return null;   // 인자 하나라도 모르면 키를 만들지 않는다
+    return d.params;
+  };
 
   if (table === 0x06) {                     // MethodDef — 같은 어셈블리
     const name = md.getString(md.readCol(0x06, row, 3));
     const typeFull = typeOfMethodRow.get(row) || null;
-    return typeFull ? { type: typeFull, method: name, kind: 'internal' } : null;
+    return typeFull
+      ? { type: typeFull, method: name, kind: 'internal', params: paramsOf(md.getBlob(md.readCol(0x06, row, 4))) }
+      : null;
   }
 
   if (table === 0x0A) {                     // MemberRef — 다른 어셈블리 또는 TypeRef
     const parent = md.readCol(0x0A, row, 0);
     const name = md.getString(md.readCol(0x0A, row, 1));
+    const refParams = paramsOf(md.getBlob(md.readCol(0x0A, row, 2)));
     const tag = parent & 0x7;
     const prow = parent >>> 3;
     if (tag === 1) {                        // TypeRef
       const ns = md.getString(md.readCol(0x01, prow, 2));
       const nm = md.getString(md.readCol(0x01, prow, 1));
-      return { type: ns ? `${ns}.${nm}` : nm, method: name, kind: 'external' };
+      return { type: ns ? `${ns}.${nm}` : nm, method: name, kind: 'external', params: refParams };
     }
     if (tag === 0) {                        // TypeDef
       const ns = md.getString(md.readCol(0x02, prow, 2));
       const nm = md.getString(md.readCol(0x02, prow, 1));
-      return { type: ns ? `${ns}.${nm}` : nm, method: name, kind: 'internal' };
+      return { type: ns ? `${ns}.${nm}` : nm, method: name, kind: 'internal', params: refParams };
     }
     return null;                            // ModuleRef/MethodDef/TypeSpec 부모는 지금 다루지 않는다
   }
@@ -150,7 +165,7 @@ function resolveCallTarget(md, tok, typeOfMethodRow) {
     const inner = md.readCol(0x2B, row, 0);
     const tag = inner & 0x1;
     const irow = inner >>> 1;
-    return resolveCallTarget(md, ((tag === 0 ? 0x06 : 0x0A) << 24) | irow, typeOfMethodRow);
+    return resolveCallTarget(md, ((tag === 0 ? 0x06 : 0x0A) << 24) | irow, typeOfMethodRow, resolveCoded);
   }
 
   return null;
@@ -175,6 +190,26 @@ function extractCalls(dllPath, knownTypes) {
     for (let m = start; m <= end && m >= 1; m++) typeOfMethodRow.set(m, full);
   }
 
+  // 시그니처의 TypeDefOrRefEncoded 를 이름으로 바꾸는 콜백. `extends` 컬럼과 같은 인코딩이다.
+  const resolveCoded = (coded) => {
+    const tag = coded & 0x3;
+    const row = coded >> 2;
+    if (!row) return null;
+    try {
+      if (tag === 0) {
+        const ns = md.getString(md.readCol(0x02, row, 2));
+        const nm = md.getString(md.readCol(0x02, row, 1));
+        return ns ? `${ns}.${nm}` : nm;
+      }
+      if (tag === 1) {
+        const ns = md.getString(md.readCol(0x01, row, 2));
+        const nm = md.getString(md.readCol(0x01, row, 1));
+        return ns ? `${ns}.${nm}` : nm;
+      }
+    } catch { /* 손상된 행 - 모른다 */ }
+    return null;   // TypeSpec 은 인스턴스마다 다르므로 키에 쓰지 않는다
+  };
+
   const edges = [];
   let decoded = 0, failed = 0, bodiless = 0;
 
@@ -186,6 +221,13 @@ function extractCalls(dllPath, knownTypes) {
     const callerType = typeOfMethodRow.get(m);
     const callerName = md.getString(md.readCol(0x06, m, 3));
     if (!callerType) continue;
+    // 호출하는 쪽도 오버로드일 수 있다. 정의 쪽 시그니처라 거의 항상 해석된다
+    // (실측: MethodDef 178,574개 중 `?` 포함 225개 = 0.13%).
+    const callerSig = (() => {
+      const d = sigtypes.decodeMethodSig(md.getBlob(md.readCol(0x06, m, 4)), resolveCoded);
+      if (!d || d.params.some(x => x === '?')) return null;
+      return d.params;
+    })();
 
     let p = body.ilStart;
     const end = body.ilStart + body.codeSize;
@@ -217,12 +259,12 @@ function extractCalls(dllPath, knownTypes) {
 
       if (isCall) {
         const tok = md.buf.readUInt32LE(callTokenAt);
-        const target = resolveCallTarget(md, tok, typeOfMethodRow);
+        const target = resolveCallTarget(md, tok, typeOfMethodRow, resolveCoded);
         // 사용자 어셈블리 안의 타입만 남긴다 — UnityEngine/BCL 까지 담으면 그래프가 폭발한다.
         if (target && knownTypes.has(target.type)) {
           edges.push({
-            fromType: callerType, fromMethod: callerName,
-            toType: target.type, toMethod: target.method,
+            fromType: callerType, fromMethod: callerName, fromParams: callerSig,
+            toType: target.type, toMethod: target.method, toParams: target.params || null,
           });
         }
       }
@@ -247,7 +289,16 @@ function buildCallGraph(root, symbolIndex) {
 
   const callsFrom = new Map();     // "Type::Method" -> Set("Type::Method")
   const callersOf = new Map();
+  // 시그니처 키 그래프를 **병렬로** 둔다. 이름 키를 교체하지 않는 이유 둘:
+  //   1) UnityEvent 배선과 속성은 메서드 **이름만** 갖고 있다 - 시그니처로 가를 방법이
+  //      원리적으로 없으므로 이름 단위 롤업이 어차피 필요하다
+  //   2) 실측(2026-08-27): 오버로드된 키를 향하는 엣지는 8,673개 중 366개(4.2%)이고
+  //      영향받는 키 101개의 상위는 대부분 벤더(Ami.BroAudio.*)다. 그 4.2% 를 위해
+  //      소비자 6곳의 키를 흔드는 것은 대가가 이득보다 크다
+  const callsFromSig = new Map();
+  const callersOfSig = new Map();
   let decoded = 0, failed = 0, bodiless = 0, edgeCount = 0;
+  let sigEdgeCount = 0, sigUnresolved = 0;
   const perAssembly = [];
 
   for (const a of userAsm) {
@@ -269,12 +320,29 @@ function buildCallGraph(root, symbolIndex) {
       let c = callersOf.get(to);
       if (!c) callersOf.set(to, c = new Set());
       c.add(from);
+
+      // 양쪽 시그니처를 다 알 때만 시그니처 그래프에 넣는다. 한쪽이라도 모르면
+      // **미해석으로 센다** - 아무 오버로드에 붙이면 조용히 틀린 답이 된다.
+      if (e.fromParams && e.toParams) {
+        const fromSig = sigtypes.methodSigKey(e.fromType, e.fromMethod, e.fromParams);
+        const toSig = sigtypes.methodSigKey(e.toType, e.toMethod, e.toParams);
+        if (fromSig !== toSig) {
+          let fs = callsFromSig.get(fromSig);
+          if (!fs) callsFromSig.set(fromSig, fs = new Set());
+          if (!fs.has(toSig)) { fs.add(toSig); sigEdgeCount++; }
+          let cs = callersOfSig.get(toSig);
+          if (!cs) callersOfSig.set(toSig, cs = new Set());
+          cs.add(fromSig);
+        }
+      } else {
+        sigUnresolved++;
+      }
     }
     perAssembly.push({ assembly: a.assembly, decoded: r.decoded, failed: r.failed, edges: r.edges.length });
   }
 
   return {
-    callsFrom, callersOf, perAssembly,
+    callsFrom, callersOf, callsFromSig, callersOfSig, perAssembly,
     stats: {
       assemblies: userAsm.length,
       methodsDecoded: decoded,
@@ -283,6 +351,9 @@ function buildCallGraph(root, symbolIndex) {
       edges: edgeCount,
       callees: callsFrom.size,
       callTargets: callersOf.size,
+      sigEdges: sigEdgeCount,
+      sigCallTargets: callersOfSig.size,
+      sigUnresolvedEdges: sigUnresolved,
       msTotal: Date.now() - t0,
     },
   };

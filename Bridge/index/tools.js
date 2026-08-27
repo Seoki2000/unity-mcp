@@ -134,6 +134,8 @@ function cachePath(root) {
 
 // 4: YAML_EXT 확장 (2026-08-23). 구 캐시는 6종만 훑은 것이라 참조 커버리지가 부족하다.
 //    버전을 올려 자동으로 폐기시킨다 — 안 올리면 수정이 재빌드 전까지 안 먹는다.
+// 12: 시그니처 키 호출 그래프 추가 (2026-08-27). 구 캐시에는 callsFromSig 가 없어
+//     오버로드 구분이 통째로 빠진다.
 // 5: 캐시 지문 추가 (2026-08-23). 이전 캐시에는 fingerprint 가 없어 유효성 검사가 불가능하다.
 // 6: 참조 엣지 규칙 변경 (2026-08-24) — 맨 GUID 참조, .meta 참조, 자기 참조 제외.
 //    지문은 **디스크 상태**만 보므로 코드가 바뀐 것은 못 잡는다. 버전을 안 올리면
@@ -145,7 +147,7 @@ function cachePath(root) {
 // 10: ProjectSettings 를 참조 출처로 스캔. 프로젝트 에셋 19개(그중 씬 13)의 참조가 빠져 있었다.
 // 11: 전체 이름이 겹쳐 밀린 타입 123개를 캐시에 보존. 이걸 잃으면 짧은 이름이 전부 유일해 보여
 //     유일성에 기대는 두 곳이 조용히 하나를 골라 답한다(캐시로 뜬 세션에서만 다르게 동작했다).
-const CACHE_VERSION = 11;
+const CACHE_VERSION = 12;
 
 function saveCache(index) {
   try {
@@ -165,6 +167,11 @@ function saveCache(index) {
       callGraph: index.callGraph ? {
         stats: index.callGraph.stats,
         callsFrom: [...index.callGraph.callsFrom].map(([k, v]) => [k, [...v]]),
+        // 시그니처 그래프도 저장한다. 안 하면 캐시로 뜬 세션에서 오버로드 구분이
+        // 통째로 사라지고, 도구는 "시그니처 키가 없다" 를 조용히 답한다 - 캐시가
+        // duplicateTypes 를 잃어 모호성이 사라진 전례와 같은 형태다(§4-(24)-2).
+        callsFromSig: index.callGraph.callsFromSig
+          ? [...index.callGraph.callsFromSig].map(([k, v]) => [k, [...v]]) : null,
       } : null,
       typeNameRefs: index.typeNameRefs ? {
         stats: index.typeNameRefs.stats,
@@ -259,7 +266,22 @@ function loadCache(root) {
           c.add(from);
         }
       }
-      cg = { callsFrom, callersOf, perAssembly: [], stats: raw.callGraph.stats || {} };
+      // 시그니처 그래프를 역방향까지 복원한다. 저장 형태는 callsFromSig 하나뿐이고
+      // callersOfSig 는 빌드 때와 같은 방식으로 뒤집어 만든다.
+      let callsFromSig = new Map();
+      let callersOfSig = new Map();
+      if (Array.isArray(raw.callGraph.callsFromSig)) {
+        callsFromSig = new Map(raw.callGraph.callsFromSig.map(([k, v]) => [k, new Set(v)]));
+        for (const [from, tos] of callsFromSig) {
+          for (const to of tos) {
+            let c = callersOfSig.get(to);
+            if (!c) callersOfSig.set(to, c = new Set());
+            c.add(from);
+          }
+        }
+      }
+      cg = { callsFrom, callersOf, callsFromSig, callersOfSig,
+             perAssembly: [], stats: raw.callGraph.stats || {} };
     }
 
     let iw = null;
