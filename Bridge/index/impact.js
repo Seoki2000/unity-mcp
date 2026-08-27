@@ -513,8 +513,9 @@ function buildImpact(index, args) {
     overloads: 'call graph keys are Type::Method, so overloads share one key and their callers are merged',
     nestedTypeNames:
       'type names are namespace.name without the declaring type, so nested types with the same name ' +
-      'collide (123 types in this project, all nested). Impact for such a name is refused rather than ' +
-      'guessed; other tools report the collision as ambiguousFullName.',
+      'collide (measured here: 123 duplicate records across 29 distinct names, 19 of them ' +
+      'compiler-generated). Impact for such a name is refused rather than guessed, and the response ' +
+      'lists Outer/Inner candidates you can pass instead.',
   };
 
   // 무엇이 "깨지나" 는 **어떤 연산인가**에 달렸다. 같은 데이터가 연산에 따라 다르게 읽힌다:
@@ -551,8 +552,17 @@ function buildImpact(index, args) {
       breaks: [],
       note: 'no structural reference changes; behaviour changes for everything listed above',
     },
-    basis: 'derived from how each axis points at the target (name string / GUID / compiled reference), ' +
-           'not from testing Unity behaviour. Verify before a large rename.',
+    // 2026-08-27: 이 세 갈래를 **Unity 를 켜고 실측했다.** 픽스처(스크립트 3개 + 프리팹 1개)를
+    // 만들어 이름 변경을 세 형태로 적용하고 관측했다 — 하네스는 Tools/verify-effect-by-operation.md.
+    basis: 'verified on a live editor (2026-08-27), not only derived from serialization shape. ' +
+           'Method rename with a stale caller: compiler raises CS1061 at the caller line (caughtByCompiler ' +
+           'holds). Method rename applied to the caller too: compilation succeeds, no console warning and ' +
+           'no Editor.log entry, while the prefab still stores the old m_MethodName - the wiring is dead ' +
+           'and only this index reports it (breaksSilently holds). Class rename with the file name ' +
+           'unchanged: Unity still resolves the component (get_prefab_info reported the new class), so ' +
+           'attachedTo survives a rename (survives holds) - but this index degrades typeResolution from ' +
+           'filename-match to unity-derived, which is the signal that the names no longer agree. ' +
+           'Not covered by that test: a file holding several MonoBehaviours, moveOrReimport, and delete.',
   };
 
   out.summary.impactedCount = impacted;
