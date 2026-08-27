@@ -30,6 +30,9 @@ namespace Community.Unity.MCP
             // Determine search type
             string searchType = string.IsNullOrEmpty(args.type) ? "name" : args.type.ToLower();
             string ambiguityNote = null;
+            // reference 경로만 채운다. 나머지 검색은 -1 로 남겨 "이 검색에는 해당 없음" 을 말한다
+            // (0 이면 "훑었는데 0개" 로 읽힌다).
+            int scannedAssetCount = -1;
             
             switch (searchType)
             {
@@ -52,7 +55,8 @@ namespace Community.Unity.MCP
                 case "reference":
                 {
                     string refusal;
-                    ambiguityNote = SearchByReference(args.query, searchPath, results, maxResults, out refusal);
+                    ambiguityNote = SearchByReference(args.query, searchPath, results, maxResults,
+                                                     out refusal, out scannedAssetCount);
                     // 스코프가 너무 넓으면 30초를 태우고 -32603 으로 죽는 대신 즉시 대안을 말한다.
                     if (refusal != null) return new McpToolError { error = refusal };
                     break;
@@ -66,10 +70,13 @@ namespace Community.Unity.MCP
                 query = args.query,
                 searchType = searchType,
                 folder = searchPath,
-                // 0 건일 때 무엇을 훑고 0 인지 말한다. folder 는 이제 실제로 지켜진다.
-                scannedAssetCount = _lastScannedCount,
+                // 0 건일 때 무엇을 훑고 0 인지 말한다. reference 가 아니면 -1(해당 없음)이다.
+                scannedAssetCount = scannedAssetCount,
                 resultCount = results.Count,
-                truncated = results.Count >= maxResults,
+                // maxResults 에 딱 닿은 것과 정말 잘린 것을 구별할 수 없다. 루프가 상한에서
+                // 멈췄다는 사실만 아는 것이므로 이름을 그렇게 바꾼다 — `truncated: true` 는
+                // "뒤에 더 있다" 로 읽히고, 그건 이 값이 보장하지 못한다.
+                hitResultCap = results.Count >= maxResults,
                 // reference 검색에는 **왜 두 경로가 있는지**를 항상 말한다. 거절 경로에서만
                 // unity_find_references 를 언급하고 있었어서, 정상 경로의 호출자는 96배 빠른
                 // 대안이 있다는 것도, 두 답이 갈릴 수 있다는 것도 알 방법이 없었다.
@@ -254,13 +261,18 @@ namespace Community.Unity.MCP
             "the edges: GetDependencies misses VFX Graph internal references (measured), while the index " +
             "cannot see runtime path lookups. When a zero matters, ask both.";
 
-        // 마지막 reference 스캔이 실제로 훑은 에셋 수. 0 건 응답의 근거로 싣는다.
-        [ThreadStatic] private static int _lastScannedCount;
+        // ⚠️ 여기 처음 구현은 [ThreadStatic] 정적 변수였다. reference 경로만 쓰는데
+        // 응답은 항상 그 값을 실었으므로, **같은 스레드에서 name/content 검색을 하면
+        // 직전 reference 스캔의 수치가 그대로 새어나갔다.** 실측으로 걸렸다:
+        // reference 검색(3,143) 직후의 name 검색이 scannedAssetCount 3,143 을 보고했다.
+        // 훑지 않은 것에 대해 "3,143개 훑었다" 고 말하는 형태다. 값을 흘려보내는 대신
+        // out 으로 그 호출에서만 받는다.
 
         private static string SearchByReference(string query, string folder, List<SearchResult> results,
-                                                int maxResults, out string refusal)
+                                                int maxResults, out string refusal, out int scannedCount)
         {
             refusal = null;
+            scannedCount = 0;
             string targetPath = null;
             string ambiguity = null;
 
@@ -348,7 +360,7 @@ namespace Community.Unity.MCP
                 return null;
             }
 
-            _lastScannedCount = scoped.Count;
+            scannedCount = scoped.Count;
             string[] allAssets = scoped.ToArray();
 
             foreach (var assetPath in allAssets)
@@ -461,9 +473,12 @@ namespace Community.Unity.MCP
             public string query;
             public string searchType;
             public string folder;
+            // reference 검색에서 GetDependencies 를 돌린 에셋 수. 다른 검색 타입에서는 -1 이다.
             public int scannedAssetCount;
             public int resultCount;
-            public bool truncated;
+            // 결과가 maxResults 에 닿아 루프가 멈췄다는 뜻. **뒤에 더 있다는 보장이 아니다** —
+            // 정확히 N 개인 경우와 구별할 수 없다. 이름을 truncated 에서 바꿨다.
+            public bool hitResultCap;
             public string note;          // 모호한 reference 질의 등에 대한 경고
             public SearchResult[] results;
         }
