@@ -45,13 +45,17 @@ check('본문 안의 줄이 메서드로 정확히 귀속된다 (exact)', () => 
            detail: e && e.method ? `${e.method.name} (${e.method.containment}, line ${e.method.line})` : JSON.stringify(d).slice(0,120) };
 });
 
-// 2. ⭐ 시그니처 줄. 시퀀스 포인트는 본문부터라 130 은 어느 범위에도 안 들어간다.
-//    조용히 못 찾았다고 하지 말고 **추정임을 밝히고** 다음 메서드로 귀속한다.
-check('시그니처 줄이 inferred 로 귀속된다 (범위 밖)', () => {
+// 2. ⭐ 범위 밖의 줄을 **조용히 버리지 않는다.**
+//    시퀀스 포인트는 본문부터라 시그니처 줄은 어느 [line, endLine] 에도 없다.
+//    처음엔 이 자리를 전부 `inferred` 로 냈고, 나중에 소스에서 선언 줄을 찾아
+//    `signature` / `gap` 으로 쪼갰다(프로브 12·13). 여기서 요구하는 것은 그 세부가
+//    아니라 **메서드가 null 이 아니고 exact 를 사칭하지 않는다**는 것이다.
+check('범위 밖의 줄도 메서드에 귀속되고 exact 를 사칭하지 않는다', () => {
   const d = call({ errors: [{ file: BA, line: 130, message: 'CS0000: signature' }] });
   const e = (d.errors || [])[0];
-  return { ok: e && e.method && e.method.name === 'TryResolveHit' && e.method.containment === 'inferred',
-           detail: e && e.method ? `${e.method.name} (${e.method.containment})` : 'method 없음' };
+  const m = e && e.method;
+  return { ok: !!m && m.name === 'TryResolveHit' && m.containment !== 'exact' && !!m.containmentNote,
+           detail: m ? `${m.name} (${m.containment}), note ${m.containmentNote ? '있음' : '없음'}` : 'method 없음' };
 });
 
 // 3. 오버로드가 있으면 어느 것인지 말해야 한다 — 이제 줄로 구분된다.
@@ -130,6 +134,37 @@ check('붙은 에셋 수가 인덱스와 일치한다 (왕복)', () => {
   const e = call({ errors: [{ file: picked.path, line: 1, message: 'x' }] }).errors[0];
   return { ok: e.attachedAssetCount === picked.expect,
            detail: `${picked.path.split('/').pop()}: 응답 ${e.attachedAssetCount} vs 인덱스 ${picked.expect}` };
+});
+
+// 12. 시그니처 줄을 `signature` 로 승급한다 — 예전엔 전부 `inferred` 였다.
+//     실측(표본 276): 본문시작 - 선언줄 거리는 중앙 2 / 최대 5. 위로 8줄 훑으면 덮인다.
+check('시그니처 줄이 signature 로 승급된다', () => {
+  const e = call({ errors: [{ file: BA, line: 130, message: 'CS0000: sig' }] }).errors[0];
+  const m = e.method;
+  return { ok: m && m.containment === 'signature' && m.declLine === 130,
+           detail: m ? `${m.name} (${m.containment}, decl ${m.declLine}, body ${m.line})` : 'method 없음' };
+});
+
+// 13. 메서드와 무관한 줄은 `gap` 이다 — 승급하지 않는다.
+check('메서드 밖의 줄은 gap 이고 승급하지 않는다', () => {
+  const e = call({ errors: [{ file: BA, line: 1, message: 'x' }] }).errors[0];
+  const m = e.method;
+  return { ok: m && m.containment === 'gap',
+           detail: m ? `line 1 -> ${m.name} (${m.containment})` : 'method 없음' };
+});
+
+// 14. 경계 — 확신도가 네 값 중 하나여야 한다. 새 값이 조용히 새면 읽는 쪽이 모른다.
+check('확신도가 exact/signature/gap 중 하나다 (경계)', () => {
+  const lines = [140, 130, 128, 1, 45, 200, 9999];
+  const seen = new Set();
+  for (const L of lines) {
+    const m = call({ errors: [{ file: BA, line: L, message: 'x' }] }).errors[0].method;
+    if (m) seen.add(m.containment);
+  }
+  const allowed = new Set(['exact', 'signature', 'gap']);
+  const bad = [...seen].filter(x => !allowed.has(x));
+  return { ok: bad.length === 0 && seen.size >= 2,
+           detail: `관측된 값: ${[...seen].join(', ')}` + (bad.length ? ` / 허용 밖: ${bad.join(',')}` : '') };
 });
 
 console.log(`\n${pass}/${pass + fail}`);

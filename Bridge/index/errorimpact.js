@@ -13,6 +13,9 @@
 // 갱신하지 않는다.** 즉 인덱스는 직전 성공 빌드를 설명하고, 오류 줄번호는 새 소스 기준이다.
 // 정확히 필요한 순간에 낡는다. 그래서 신선도를 응답의 일부로 싣는다.
 
+const fs = require('fs');
+const path = require('path');
+
 const MAX_ERRORS = 50;
 const BS = String.fromCharCode(92);   // 역슬래시 리터럴을 소스에 두지 않는다
 
@@ -77,7 +80,40 @@ function methodSpansForFile(index, file) {
  * 귀속하되 `inferred` 로 표시한다. 시그니처 줄의 오류가 그 메서드에 붙는 것은 맞지만,
  * 필드 초기화자나 클래스 속성의 오류도 같은 자리로 떨어진다 — 그래서 사실이 아니라 힌트다.
  */
-function attributeLine(spans, line) {
+// 선언 줄을 찾기 위해 본문 시작에서 위로 훑는 줄 수.
+// 실측(2026-08-27, 표본 276): 본문시작 - 선언줄 거리는 중앙 2 / p90 2 / **최대 5**,
+// 분포 {0:33, 1:4, 2:228, 3:6, 5:5} — 시그니처, 여는 중괄호, 첫 문장 순서라 2가 압도적이다.
+// 8 이면 속성 한두 줄이 붙은 경우까지 덮는다.
+const DECL_SCAN_UP = 8;
+
+/**
+ * 메서드의 선언 줄을 소스에서 찾는다. 못 찾으면 null — 추측하지 않는다.
+ * `get_`/`set_` 접두사는 자동 속성의 컴파일러 표기이므로 떼고 찾는다.
+ */
+function findDeclLine(srcLines, span) {
+  if (!srcLines) return null;
+  const bare = String(span.name).replace(/^(get_|set_)/, '');
+  if (!bare || bare.startsWith('<') || bare.startsWith('.')) return null;
+  const from = Math.max(1, span.line - DECL_SCAN_UP);
+  for (let k = span.line; k >= from; k--) {
+    const t = srcLines[k - 1];
+    if (t && t.includes(bare)) return k;
+  }
+  return null;
+}
+
+/**
+ * 줄 하나를 메서드에 귀속한다. 확신도를 네 단계로 낸다.
+ *
+ *   exact      본문 범위 안이다
+ *   signature  선언 줄과 본문 시작 사이다 — 시그니처·속성 줄. 소스에서 선언을 찾아 확인했다
+ *   gap        위 둘 다 아니고 다음 메서드보다 앞이다. 필드 초기화자나 클래스 속성일 수 있다
+ *   (null)     뒤에 오는 메서드가 없다
+ *
+ * `signature` 승급에는 소스가 필요하다. srcLines 가 없으면 승급하지 않고 gap 으로 남는다 —
+ * 소스를 못 읽었는데 "시그니처다" 라고 말하면 근거 없는 단정이 된다.
+ */
+function attributeLine(spans, line, srcLines) {
   if (!spans.length || typeof line !== 'number' || line <= 0) return null;
   for (const s of spans) {
     if (line >= s.line && line <= s.endLine) return Object.assign({}, s, { containment: 'exact' });
@@ -86,8 +122,13 @@ function attributeLine(spans, line) {
   for (const s of spans) {
     if (s.line >= line && (!best || s.line < best.line)) best = s;
   }
-  if (best) return Object.assign({}, best, { containment: 'inferred' });
-  return null;
+  if (!best) return null;
+
+  const decl = findDeclLine(srcLines, best);
+  if (decl !== null && line >= decl && line < best.line) {
+    return Object.assign({}, best, { containment: 'signature', declLine: decl });
+  }
+  return Object.assign({}, best, { containment: 'gap', ...(decl !== null ? { declLine: decl } : {}) });
 }
 
 function explain(index, args, meta) {
@@ -106,6 +147,7 @@ function explain(index, args, meta) {
 
   const sym = index.symbols;
   const out = [];
+  const srcCache = new Map();
 
   for (const e of taken) {
     const rawFile = e && e.file;
@@ -134,7 +176,19 @@ function explain(index, args, meta) {
 
     row.resolution = 'resolved';
     const spans = methodSpansForFile(index, file);
-    const hit = attributeLine(spans, row.line);
+    // 선언 줄을 확인하려면 소스가 필요하다. 오류당 파일 하나이고 상한이 50개라 싸다.
+    // 같은 파일이 여러 번 나오면 캐시한다.
+    let srcLines = null;
+    if (meta && meta.projectRoot) {
+      const abs = path.join(meta.projectRoot, file);
+      if (srcCache.has(abs)) srcLines = srcCache.get(abs);
+      else {
+        try { srcLines = fs.readFileSync(abs, 'utf8').split(String.fromCharCode(10)); }
+        catch { srcLines = null; }
+        srcCache.set(abs, srcLines);
+      }
+    }
+    const hit = attributeLine(spans, row.line, srcLines);
     if (hit) {
       row.method = {
         name: hit.name,
@@ -143,11 +197,18 @@ function explain(index, args, meta) {
         containment: hit.containment,
         key: hit.typeFullName + '::' + hit.name,
       };
-      if (hit.containment === 'inferred') {
+      if (hit.declLine) row.method.declLine = hit.declLine;
+      if (hit.containment === 'signature') {
         row.method.containmentNote =
-          'line falls outside every method body span. PDB sequence points start past the opening ' +
-          'brace, so signatures, attributes and field initializers sit outside every span. ' +
-          'Attributed to the next method by position - treat as a hint, not a fact.';
+          'line is between this method declaration (declLine, found in the source) and its first ' +
+          'sequence point, i.e. the signature or an attribute. Confident: the method name was located ' +
+          'on that line in the file on disk.';
+      } else if (hit.containment === 'gap') {
+        row.method.containmentNote =
+          'line is before this method but outside its declaration block, so it may belong to a field ' +
+          'initializer, a type-level attribute or another member entirely. Attributed to the next ' +
+          'method by position - a hint, not a fact.' +
+          (srcLines ? '' : ' The source file could not be read, so the declaration line was not checked.');
       }
     } else {
       row.method = null;
