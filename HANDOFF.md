@@ -72,7 +72,7 @@ dev-0.0.2 절(§8), 독립 감사 절(§9), 레이어 D 절(§10), 라이브 교
 
 | 항목 | 상태 |
 |---|---|
-| 리포 | 워킹트리 깨끗, `optimized` = `origin/optimized` = `ee71e49`. 이번 세션 커밋 8개(`c147f9e` 이후) |
+| 리포 | 워킹트리 깨끗, `optimized` = `origin/optimized` = `60ae47a`. P2 작업분 커밋 8개(`c147f9e` → `60ae47a`) |
 | **Unity** | **꺼져 있다.** 마지막 라이브 검증은 02:06(`tools/list` 84개 / 42,142 B) |
 | 인덱스 캐시 | `~/.unity-mcp/index-C_Unity_MainProject.json` — **버전 11**, 3.2 MB, 참조 엣지 6,305, `duplicateTypes` 123개 보존. 지문 유효 |
 | `tools-cache.json` | 84개(새 도구 둘 포함) — **Unity 가 꺼진 채로 CC 를 붙여도 목록이 최신이다** |
@@ -201,8 +201,8 @@ dotnet build-server shutdown
 | 2c-감사 | (2026-08-24) | 경로 봉쇄, 확장자 화이트리스트 폐기, `.meta` 참조, 자기참조 제외 |
 | 3-P0 | (2026-08-24) | 레이어 D — 인스펙터 배선 / 타입 이름 문자열 / 속성 진입점 / 경로 로드 |
 | 3-P0 교차검증 | `1102330` `53e0bf3` | 라이브 대조군(예상 5/5 적중) + `find_references` 타입이름 축 오답 38건 수정 |
-| 3-P1 | (2026-08-26) | `unity_project_map` — 배치·진입점 지도. 중심성 랭킹 기각(측정), 인수 프로브 6/7 |
-| 3-P2 | (2026-08-26) | `unity_impact_analysis` — 축 9개를 합치지 않고 + `unknown`. 프로브 10/10, 결함 3건 동반 수정 |
+| 3-P1 | `95872ad` | `unity_project_map` — 배치·진입점 지도. 중심성 랭킹 기각(측정), 인수 프로브 6/7 |
+| 3-P2 | `25144ca` `5bf9382` `f75cf7c` | `unity_impact_analysis` — 축 9개를 합치지 않고 + `unknown`. 프로브 10/10. 동반 수정: ProjectSettings 스캔 / 캐시 중복 타입 / 없는 대상 / `find_callers` 리졸버 / `effectByOperation` |
 
 ### 인덱스 성능 (MainProject, Unity 6000.3.16f1) — 2026-08-24 재측정
 ```
