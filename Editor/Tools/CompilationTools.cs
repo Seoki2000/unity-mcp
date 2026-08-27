@@ -1,4 +1,5 @@
 using System;
+using System.IO;
 using System.Collections.Generic;
 using UnityEditor;
 using UnityEditor.Compilation;
@@ -23,6 +24,86 @@ namespace Community.Unity.MCP
         //   실패 → 리로드 없음 → OnCompilationFinished 에서 집합 정리 → 잡은 에러 있음으로 failed 판정.
         private static readonly HashSet<string> _pendingRecompileJobs = new HashSet<string>();
 
+        // ── 진단 완결성 (P3-a) ─────────────────────────────────────────────
+        //
+        // 왜 필요한가 — 실측(2026-08-27): 재컴파일을 걸고 149회 폴링하는 동안 응답이 내내
+        // {isCompiling:false, hasErrors:false, errorCount:0, warningCount:0} 이었다.
+        // 그런데 Editor.log 는 "2182 evaluated, 1 updated" 였다. 즉 사용자 어셈블리는
+        // 하나도 컴파일되지 않았는데 응답은 "깨끗하게 컴파일됨" 과 **구별되지 않았다.**
+        // 성공 경로가 도메인 리로드로 static 을 지우기 때문이다.
+        //
+        // 0 이 "관측했더니 없다" 인지 "관측한 적이 없다" 인지 응답이 말해야 한다.
+        // 이 프로젝트가 참조·호출 축에서 없애온 것과 같은 형태의 거짓말이다.
+        //
+        // SessionState 를 쓰는 이유: 도메인 리로드는 넘고 **에디터 재시작에는 소멸**한다.
+        // 그게 맞다 — 새로 켠 에디터는 정말로 이번 세대를 관측한 적이 없다.
+        private const string K_GEN   = "mcp.compile.generation";
+        private const string K_STATE = "mcp.compile.state";
+        private const string K_START = "mcp.compile.startedAt";
+        private const string K_END   = "mcp.compile.finishedAt";
+        private const string K_ASMS  = "mcp.compile.observedAssemblies";
+        private const string K_ERRS  = "mcp.compile.errorsJson";
+        private const string K_WARN  = "mcp.compile.warningCount";
+
+        private const string STATE_UNOBSERVED = "unobserved";
+        private const string STATE_COLLECTING = "collecting";
+        private const string STATE_COMPLETE   = "complete";
+
+        [Serializable]
+        private class ErrorEnvelope { public CompilationError[] items; }
+
+        private static string NowIso()
+        {
+            return DateTime.UtcNow.ToString("yyyy-MM-ddTHH:mm:ssZ");
+        }
+
+        /// <summary>수집 결과를 리로드 너머로 남긴다. 호출부는 이미 _compilationErrors 락 안이다.</summary>
+        private static void PersistDiagnostics()
+        {
+            var env = new ErrorEnvelope { items = _compilationErrors.ToArray() };
+            SessionState.SetString(K_ERRS, JsonUtility.ToJson(env, false));
+            SessionState.SetInt(K_WARN, _warningCount);
+        }
+
+        /// <summary>리로드 뒤 첫 접근에서 수집분을 되살린다.</summary>
+        private static void RestoreDiagnostics()
+        {
+            var json = SessionState.GetString(K_ERRS, string.Empty);
+            if (string.IsNullOrEmpty(json)) return;
+            try
+            {
+                var env = JsonUtility.FromJson<ErrorEnvelope>(json);
+                if (env != null && env.items != null)
+                {
+                    _compilationErrors.Clear();
+                    _compilationErrors.AddRange(env.items);
+                }
+            }
+            catch { /* 손상된 스냅샷은 "관측 없음" 으로 떨어진다 — 조용히 0 을 만들지 않는다 */ }
+            _warningCount = SessionState.GetInt(K_WARN, 0);
+        }
+
+        /// <summary>
+        /// 오류가 난 파일의 출처. 고칠 수 있는지가 여기서 갈린다.
+        /// 판정이 아니라 **분류를 그대로 싣는다** — 무엇을 할지는 읽는 쪽이 정한다.
+        /// </summary>
+        private static string ClassifyOrigin(string file)
+        {
+            if (string.IsNullOrEmpty(file)) return "unknown";
+            var n = file.Replace(Path.DirectorySeparatorChar, '/');
+            if (n.IndexOf("/Library/PackageCache/", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                n.StartsWith("Library/PackageCache/", StringComparison.OrdinalIgnoreCase))
+                return "packageCache";
+            if (n.StartsWith("Assets/", StringComparison.OrdinalIgnoreCase) ||
+                n.IndexOf("/Assets/", StringComparison.OrdinalIgnoreCase) >= 0)
+                return "assets";
+            if (n.StartsWith("Packages/", StringComparison.OrdinalIgnoreCase) ||
+                n.IndexOf("/Packages/", StringComparison.OrdinalIgnoreCase) >= 0)
+                return "embeddedPackage";
+            if (Path.IsPathRooted(n)) return "localPackage";
+            return "unknown";
+        }
+
         static CompilationTools()
         {
             Initialize();
@@ -45,6 +126,12 @@ namespace Community.Unity.MCP
             {
                 _compilationErrors.Clear();
                 _warningCount = 0;
+                SessionState.SetInt(K_GEN, SessionState.GetInt(K_GEN, 0) + 1);
+                SessionState.SetString(K_STATE, STATE_COLLECTING);
+                SessionState.SetString(K_START, NowIso());
+                SessionState.SetString(K_END, string.Empty);
+                SessionState.SetInt(K_ASMS, 0);
+                PersistDiagnostics();
             }
         }
 
@@ -56,6 +143,10 @@ namespace Community.Unity.MCP
             lock (_compilationErrors)
             {
                 _pendingRecompileJobs.Clear();
+                // 이 컴파일 세대의 관측이 끝났다. 여기서부터의 0 은 "관측했더니 없다" 이다.
+                SessionState.SetString(K_STATE, STATE_COMPLETE);
+                SessionState.SetString(K_END, NowIso());
+                PersistDiagnostics();
             }
         }
 
@@ -63,6 +154,7 @@ namespace Community.Unity.MCP
         {
             lock (_compilationErrors)
             {
+                SessionState.SetInt(K_ASMS, SessionState.GetInt(K_ASMS, 0) + 1);
                 foreach (var message in messages)
                 {
                     if (message.type == CompilerMessageType.Error)
@@ -72,7 +164,8 @@ namespace Community.Unity.MCP
                         {
                             message = message.message,
                             file = message.file,
-                            line = message.line
+                            line = message.line,
+                            origin = ClassifyOrigin(message.file)
                         });
                     }
                     else if (message.type == CompilerMessageType.Warning)
@@ -81,6 +174,7 @@ namespace Community.Unity.MCP
                         _warningCount++;
                     }
                 }
+                PersistDiagnostics();
             }
         }
 
@@ -88,24 +182,68 @@ namespace Community.Unity.MCP
         public static object GetCompilationStatus(string argsJson)
         {
             Initialize();
-            
+
             List<CompilationError> errors;
             int warningCount;
             lock (_compilationErrors)
             {
+                if (_compilationErrors.Count == 0) RestoreDiagnostics();
                 errors = new List<CompilationError>(_compilationErrors);
                 warningCount = _warningCount;
             }
-            
+
+            var isCompiling = EditorApplication.isCompiling;
+            var state = SessionState.GetString(K_STATE, STATE_UNOBSERVED);
+            // 컴파일 중이면 아직 assemblyCompilationFinished 를 안 보낸 어셈블리가 남아 있다.
+            // 그 관측을 "오류 없음" 으로 굳히면 안 된다.
+            if (isCompiling) state = STATE_COLLECTING;
+
             return new CompilationStatusResult
             {
-                isCompiling = EditorApplication.isCompiling,
+                isCompiling = isCompiling,
                 hasErrors = errors.Count > 0,
                 errorCount = errors.Count,
                 warningCount = warningCount,
-                errors = errors.Count > 0 ? errors.ToArray() : null
+                errors = errors.Count > 0 ? errors.ToArray() : null,
                 // [OPTIMIZED] warnings 배열 완전 제거, 개수만 반환
+
+                // ── 진단 완결성 (P3-a) ──
+                diagnosticsState = state,
+                compilationGeneration = SessionState.GetInt(K_GEN, 0),
+                observedAssemblyCount = SessionState.GetInt(K_ASMS, 0),
+                captureStartedAt = SessionState.GetString(K_START, string.Empty),
+                captureFinishedAt = SessionState.GetString(K_END, string.Empty),
+                note = BuildStatusNote(state, errors.Count, isCompiling, SessionState.GetInt(K_ASMS, 0))
             };
+        }
+
+        /// <summary>
+        /// 0 이 무슨 뜻인지 말한다. 이 도구의 0 은 세 가지가 될 수 있고, 대응이 전부 다르다.
+        /// </summary>
+        private static string BuildStatusNote(string state, int errorCount, bool isCompiling, int observedAssemblies)
+        {
+            if (errorCount > 0) return string.Empty;
+            if (isCompiling)
+                return "errorCount is 0 but this compilation is still running (diagnosticsState=collecting). " +
+                       "Assemblies that have not reported yet are outside this observation. Not a pass.";
+            if (state == STATE_UNOBSERVED)
+                return "errorCount is 0 because no compilation has been observed in this editor session " +
+                       "(diagnosticsState=unobserved) - not because a compilation succeeded. Unity does not " +
+                       "recompile assemblies that are already up to date, and a successful compilation reloads " +
+                       "the domain, which clears this capture. Use unity_get_job_status on a recompile jobId " +
+                       "for the verdict, and check compilationGeneration to see whether a capture ever started.";
+            if (state == STATE_COLLECTING)
+                return "errorCount is 0 but the capture for this generation never reported completion " +
+                       "(diagnosticsState=collecting). Treat as unknown, not as a pass.";
+            // 가장 위험한 자리다. 사이클은 완주했는데 보고한 어셈블리가 0개라는 것은
+            // **아무것도 다시 컴파일되지 않았다**는 뜻이다(실측: Unity 가 최신 어셈블리는 건드리지 않는다).
+            // 고친 코드가 실제로 컴파일된 적이 없는데 "오류 0" 만 보면 통과로 읽는다.
+            if (observedAssemblies == 0)
+                return "errorCount is 0 and this compilation cycle completed, but observedAssemblyCount is 0 - " +
+                       "no assembly actually reported compiling. Unity skips assemblies that are already up to " +
+                       "date, so nothing was verified by this cycle. If you are checking a source edit, confirm " +
+                       "the file belongs to a compiled assembly and that the edit reached disk before recompiling.";
+            return string.Empty;
         }
 
         // Idempotent 를 뗀다. 호출마다 새 jobId 를 만들고 도메인 리로드를 유발하므로 같은 인자로
@@ -220,6 +358,8 @@ namespace Community.Unity.MCP
             public string message;
             public string file;
             public int line;
+            // 고칠 수 있는 자리인가. assets / packageCache / embeddedPackage / localPackage / unknown
+            public string origin;
         }
 
         [Serializable]
@@ -231,6 +371,14 @@ namespace Community.Unity.MCP
             public int warningCount;
             public CompilationError[] errors;
             // [OPTIMIZED] warnings 배열 제거
+
+            // ── 진단 완결성 (P3-a) — 0 이 clean 인지 unknown 인지 구분한다 ──
+            public string diagnosticsState;     // unobserved | collecting | complete
+            public int compilationGeneration;
+            public int observedAssemblyCount;
+            public string captureStartedAt;
+            public string captureFinishedAt;
+            public string note;
         }
 
         [Serializable]
