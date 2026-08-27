@@ -643,8 +643,18 @@ function findCallers(index, args) {
     perOverload.sort((a, b) => b.callerCount - a.callerCount || a.signature.localeCompare(b.signature));
   }
 
-  const methodName = r.key.slice(r.key.indexOf('::') + 2);
+  // ⚠️ 시그니처 키(`Type::Method(int)`)에서는 `(params)` 를 떼야 한다. 안 떼면
+  // methodName 이 `Method(int)` 가 되어 메타데이터의 메서드 이름과 절대 같아지지 않는다.
+  // 그러면 속성·선언·인스펙터 배선 조회가 **전부 빈 결과**로 돌아온다 — 호출자 수는 맞는데
+  // 안전 축만 조용히 사라진다. 실측으로 걸렸다: `DevBuildSceneList::LogCurrentList` 는
+  // 이름으로 물으면 속성 1개(진입점 증거)가 나오지만 시그니처 키로는 0개였다.
   const typeName = r.key.slice(0, r.key.indexOf('::'));
+  const methodName = (() => {
+    const raw = r.key.slice(r.key.indexOf('::') + 2);
+    if (!r.isSignatureKey) return raw;
+    const lp = raw.lastIndexOf('(');
+    return lp > 0 ? raw.slice(0, lp) : raw;
+  })();
   const wirings = inspectorWiringsFor(index, r.key, methodName);
   const attributes = methodAttributesFor(index, typeName, methodName);
   // 이 키가 실제로 선언 몇 개를 덮는가. 지금까지 오버로드 경고는 **정적 상투구**여서
@@ -698,7 +708,8 @@ function findCallers(index, args) {
             ? `This key merges ${declarations.length} declarations (` +
               declarations.map(d => d.line === null ? 'line unknown' : `line ${d.line}`).join(', ') +
               '), so the callers below are the union across all of them - see declarations. ' +
-              'Overloads share one key (Type::Method) because method signatures are not decoded yet. '
+              'The name key merges them because the call graph is keyed by Type::Method; the ' +
+              'signature-keyed graph next to it is what perOverload reads. '
             : '') +
           'Only calls from project (user assembly) code are indexed.' +
           (page.total === 0 && !wirings.length && !attributes.length && index.inspectorWiring
@@ -714,7 +725,14 @@ function findCallees(index, args) {
   const r = resolveMethodKey(index, args.method);
   if (r.error) return r;
 
-  const set = index.callGraph.callsFrom.get(r.key);
+  // resolveMethodKey 는 시그니처 키를 받아들인다. 그런데 여기서 이름 그래프만 읽고 있었다 —
+  // 유효하다고 알려준 키에 **거짓 0** 을 답했다. 실측: `DevBuildSceneList::RemoveDevBootScene()`
+  // 은 callsFromSig 에 callee 2개가 있는데 totalCount 0 이 나갔다.
+  // §4-(21) 그대로다 — 공유 리졸버를 고치고 소비자 하나를 안 고쳤다.
+  const cgx = index.callGraph;
+  const set = r.isSignatureKey
+    ? (cgx.callsFromSig ? cgx.callsFromSig.get(r.key) : null)
+    : cgx.callsFrom.get(r.key);
   const callees = set ? [...set].sort() : [];
   const page = pageOf(callees, args.offset, args.maxResults);
 
@@ -869,7 +887,8 @@ function getTypeSymbols(index, args) {
       return byName.length ? { referencedByTypeName: byName } : {};
     })(),
     note: 'Field/method names come from the compiled assembly; source file mapping comes from the Portable PDB. ' +
-          'Field type signatures are not decoded yet (Phase 2b-2). ' +
+          'Field types come from the FieldSig blob (ECMA-335 II.23.2.4); null means the signature ' +
+          'could not be decoded, not that the field is untyped. ' +
           'method.line/endLine come from PDB sequence points and span the method BODY, not its signature: ' +
           'the first sequence point sits just past the opening brace, so the declaration and any attributes ' +
           'are a line or two ABOVE line. Do not treat the span as a containment test for a compiler error ' +
