@@ -315,6 +315,8 @@ function readAssembly(root, dllPath) {
     sourceFiles.sort();
 
     types.push({
+      // TypeDef 행. NestedClass(0x29) 대조로 선언 타입을 찾는 데 쓴다. 아래에서 지운다.
+      _row: r,
       fullName, name, namespace: ns, assembly: asmName,
       baseType,
       isPublic: (flags & TYPE_VISIBILITY_MASK) === TYPE_PUBLIC,
@@ -325,6 +327,44 @@ function readAssembly(root, dllPath) {
       sourceFiles,
     });
   }
+
+  // ── 중첩 타입의 신원 ──────────────────────────────────────────────
+  //
+  // 전체 이름이 `namespace.name` 이라 **선언 타입이 빠진다.** 그래서 서로 다른 클래스
+  // 안의 같은 이름이 한 이름으로 겹치고, 도구는 조용히 하나를 고르거나 거절만 한다.
+  //
+  // 실측(2026-08-27): 중복 레코드 123개 / 고유 이름 29개. 19개는 컴파일러 생성이고,
+  // 사용자가 실제로 질의할 만한 것은 PassData(3) · Segment(2) · Tab(2) ·
+  // FactorySettings(2) · EffectState(2) 다섯이다. 그 다섯을 위해 이름 체계를 바꾸면
+  // **호출 그래프 키까지 바뀐다** — 조인 전체를 흔드는 대가가 이득보다 크다.
+  //
+  // 그래서 키는 그대로 두고 **해소할 방법만 준다**: `declaringType` 을 싣고,
+  // 중첩 타입에는 `Outer/Inner` 형태의 `qualifiedName` 을 별칭으로 준다.
+  // 최상위 타입은 `declaringType: null` 이다 — 빈 문자열로 채우면 "선언 타입이 있다" 로 읽힌다.
+  const enclosing = new Map();
+  for (let r = 1; r <= md.rows(0x29); r++) {
+    enclosing.set(md.readCol(0x29, r, 0), md.readCol(0x29, r, 1));
+  }
+  const byRow = new Map();
+  for (const t of types) byRow.set(t._row, t);
+
+  for (const t of types) {
+    const encRow = enclosing.get(t._row);
+    const enc = encRow ? byRow.get(encRow) : null;
+    t.declaringType = enc ? enc.fullName : null;
+    if (!enc) { t.qualifiedName = t.fullName; continue; }
+    // 여러 겹 중첩이면 바깥까지 올라간다. 순환은 있을 수 없지만 방어한다.
+    const parts = [t.name];
+    let cur = enc, guard = 0;
+    while (cur && guard++ < 16) {
+      parts.unshift(cur.name);
+      const up = enclosing.get(cur._row);
+      cur = up ? byRow.get(up) : null;
+    }
+    const ns = t.namespace;
+    t.qualifiedName = ns ? `${ns}.${parts.join('/')}` : parts.join('/');
+  }
+  for (const t of types) delete t._row;
 
   return { assembly: asmName, dll: path.basename(dllPath), hasPdb: !!methodDoc, types };
 }
@@ -346,7 +386,8 @@ function buildSymbolIndex(root, opts = {}) {
     return { error: `Cannot read ${dir}: ${e.message}` };
   }
 
-  const typeByFullName = new Map();     // 전체 이름 -> 타입
+  const typeByFullName = new Map();
+  const typeByQualifiedName = new Map();     // 전체 이름 -> 타입
   const duplicateTypes = [];            // 전체 이름이 겹쳐 첫 것에 밀린 타입들(아래 주석 참조)
   const typesByShortName = new Map();  // 짧은 이름 -> [타입...]
   const typesBySourceFile = new Map(); // 프로젝트 상대 .cs 경로 -> [타입...]
@@ -379,6 +420,10 @@ function buildSymbolIndex(root, opts = {}) {
       // (`resolveScriptType` 의 파일명 폴백, 영향 분석의 대상 해석)이 조용히 하나를 골라 답한다.
       else duplicateTypes.push(t);
 
+      // 중첩 타입의 유일한 이름. 이걸로 물으면 조용히 하나를 고르지 않아도 된다.
+      if (t.qualifiedName && t.qualifiedName !== t.fullName && !typeByQualifiedName.has(t.qualifiedName))
+        typeByQualifiedName.set(t.qualifiedName, t);
+
       let shortList = typesByShortName.get(t.name);
       if (!shortList) typesByShortName.set(t.name, shortList = []);
       shortList.push(t.fullName);
@@ -392,7 +437,7 @@ function buildSymbolIndex(root, opts = {}) {
   }
 
   return {
-    typeByFullName, typesByShortName, typesBySourceFile, assemblies, duplicateTypes,
+    typeByFullName, typeByQualifiedName, typesByShortName, typesBySourceFile, assemblies, duplicateTypes,
     stats: {
       dllFiles: files.length,
       userAssemblies,

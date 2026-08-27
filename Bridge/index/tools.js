@@ -215,10 +215,13 @@ function loadCache(root) {
     let sym = null;
     if (raw.symbols && Array.isArray(raw.symbols.types)) {
       const typeByFullName = new Map();
+      const typeByQualifiedName = new Map();
       const typesByShortName = new Map();
       const typesBySourceFile = new Map();
       for (const t of raw.symbols.types) {
         typeByFullName.set(t.fullName, t);
+        if (t.qualifiedName && t.qualifiedName !== t.fullName && !typeByQualifiedName.has(t.qualifiedName))
+          typeByQualifiedName.set(t.qualifiedName, t);
         let sl = typesByShortName.get(t.name);
         if (!sl) typesByShortName.set(t.name, sl = []);
         sl.push(t.fullName);
@@ -232,11 +235,13 @@ function loadCache(root) {
       // typeByFullName 은 건드리지 않는다(빌드도 첫 것만 담는다).
       const dups = Array.isArray(raw.symbols.duplicateTypes) ? raw.symbols.duplicateTypes : [];
       for (const t of dups) {
+        if (t.qualifiedName && t.qualifiedName !== t.fullName && !typeByQualifiedName.has(t.qualifiedName))
+          typeByQualifiedName.set(t.qualifiedName, t);
         let sl = typesByShortName.get(t.name);
         if (!sl) typesByShortName.set(t.name, sl = []);
         sl.push(t.fullName);
       }
-      sym = { typeByFullName, typesByShortName, typesBySourceFile, duplicateTypes: dups,
+      sym = { typeByFullName, typeByQualifiedName, typesByShortName, typesBySourceFile, duplicateTypes: dups,
               assemblies: raw.symbols.assemblies || [], stats: raw.symbols.stats || {} };
     }
 
