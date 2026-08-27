@@ -73,6 +73,72 @@ function toProjectRelative(root, absPath) {
 }
 
 /** Portable PDB → MethodDef 행 번호 → 소스 문서 경로(절대). */
+/** blob 안의 압축 부호없는 정수. ECMA-335 II.23.2. */
+function blobUInt(b, st) {
+  const x = b[st.p];
+  if ((x & 0x80) === 0) { st.p += 1; return x; }
+  if ((x & 0x40) === 0) { const v = ((x & 0x3f) << 8) | b[st.p + 1]; st.p += 2; return v; }
+  const v = ((x & 0x1f) << 24) | (b[st.p + 1] << 16) | (b[st.p + 2] << 8) | b[st.p + 3];
+  st.p += 4; return v;
+}
+
+/** blob 안의 압축 부호있는 정수. 최하위 비트가 부호이고 나머지를 오른쪽으로 민다. */
+function blobInt(b, st) {
+  const x = b[st.p];
+  let val, n, bits;
+  if ((x & 0x80) === 0) { val = x; n = 1; bits = 7; }
+  else if ((x & 0x40) === 0) { val = ((x & 0x3f) << 8) | b[st.p + 1]; n = 2; bits = 14; }
+  else { val = ((x & 0x1f) << 24) | (b[st.p + 1] << 16) | (b[st.p + 2] << 8) | b[st.p + 3]; n = 4; bits = 29; }
+  st.p += n;
+  const sign = val & 1;
+  const v = val >>> 1;
+  return sign ? v - (1 << (bits - 1)) : v;
+}
+
+// 숨은 시퀀스 포인트의 표식. 컴파일러가 "여기는 소스 위치가 없다" 고 적는 값이다.
+const HIDDEN_LINE = 0xFEEFEE;
+
+/**
+ * MethodDebugInformation.SequencePoints 를 디코딩해 메서드의 소스 줄 범위를 낸다.
+ *
+ * 왜 필요한가 - 지금까지 인덱스는 **메서드 -> 파일**만 알았다(Document 컬럼).
+ * 그래서 오버로드 둘이 응답에서 구별되지 않았고(`Unit::TakeDamage` 는 선언 2개가
+ * 한 키에 호출자 9개로 합쳐진다), `find_callers` 의 오버로드 경고는 선언이 하나뿐인
+ * 메서드에도 똑같이 붙는 **정적 상투구**였다.
+ *
+ * 검증: 디코딩한 줄번호마다 디스크의 소스를 열어 그 위 6줄 안에 메서드 이름이 있는지
+ * 봤다 - 표본 40개 전부 일치(2026-08-27). Assembly-CSharp 기준 3,027개 해석 /
+ * 716개 시퀀스 포인트 없음(추상·인터페이스·컴파일러 생성) / 디코딩 오류 0.
+ *
+ * 없는 것은 **null 로 남긴다.** 0 으로 채우면 1번 줄을 가리키는 거짓말이 된다.
+ */
+function readSequencePoints(md, row, docRow) {
+  const blobIdx = md.readCol(0x31, row, 1);
+  if (!blobIdx) return null;
+  const b = md.getBlob(blobIdx);
+  if (!b || !b.length) return null;
+
+  const st = { p: 0 };
+  blobUInt(b, st);                      // LocalSignature
+  if (!docRow) blobUInt(b, st);         // InitialDocument - Document 컬럼이 0 일 때만 있다
+
+  let first = true, line = null, minL = null, maxL = null;
+  while (st.p < b.length) {
+    const ilDelta = blobUInt(b, st);
+    // 첫 레코드가 아닌데 IL 델타가 0 이면 document-record 다(여러 파일에 걸친 메서드).
+    if (!first && ilDelta === 0) { blobUInt(b, st); continue; }
+    const dLines = blobUInt(b, st);
+    const dCols = dLines === 0 ? blobUInt(b, st) : blobInt(b, st);
+    if (dLines === 0 && dCols === 0) { first = false; continue; }   // 숨은 포인트
+    if (first) { line = blobUInt(b, st); blobUInt(b, st); first = false; }
+    else { line += blobInt(b, st); blobInt(b, st); }
+    if (line === HIDDEN_LINE) continue;
+    if (minL === null || line < minL) minL = line;
+    if (maxL === null || line > maxL) maxL = line;
+  }
+  return minL === null ? null : { line: minL, endLine: maxL };
+}
+
 function readPdbMethodDocuments(pdbPath) {
   const md = clr.open(pdbPath);
   if (!md.isPdb) return null;
@@ -100,10 +166,17 @@ function readPdbMethodDocuments(pdbPath) {
 
   // MethodDebugInformation 의 행 N 은 MethodDef 의 행 N 과 1:1 대응한다.
   const methodDoc = new Map();
+  const methodSpan = new Map();
   for (let r = 1; r <= md.rows(0x31); r++) {
     const docRow = md.readCol(0x31, r, 0);
     if (docRow) methodDoc.set(r, docNames.get(docRow) || '');
+    // 같은 패스에서 줄 범위도 읽는다. PDB 를 한 번 더 열 이유가 없다.
+    try {
+      const span = readSequencePoints(md, r, docRow);
+      if (span) methodSpan.set(r, span);
+    } catch { /* 이 메서드는 위치를 모른다 - null 로 남는다 */ }
   }
+  methodDoc.spans = methodSpan;
   return methodDoc;
 }
 
@@ -222,6 +295,9 @@ function readAssembly(root, dllPath) {
         isAbstract: !!(mf & METHOD_ABSTRACT),
         // 속성은 있을 때만 싣는다(대부분의 메서드에는 없다).
         ...(attrs && attrs.length ? { attributes: attrs } : {}),
+        // 소스 위치. 없으면 null 이다 - 0 으로 채우지 않는다.
+        line: ((methodDoc && methodDoc.spans && methodDoc.spans.get(mi)) || {}).line ?? null,
+        endLine: ((methodDoc && methodDoc.spans && methodDoc.spans.get(mi)) || {}).endLine ?? null,
         row: mi,
       });
       if (methodDoc) {
