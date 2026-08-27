@@ -922,12 +922,18 @@ function annotateReferences(index, node, localDocs, depth) {
 /** 타입과 그 베이스 체인의 필드 이름을 모은다. 인덱스 밖에서 끊기면 complete=false. */
 function collectFieldNames(sym, info) {
   const names = new Set();
+  const types = new Map();
   let cur = info;
   let complete = false;
   const seen = new Set();
 
   while (cur) {
-    for (const f of cur.fields || []) names.add(f.name);
+    for (const f of cur.fields || []) {
+      names.add(f.name);
+      // 선언 타입도 같이 모은다. 파생 클래스가 먼저 오므로 이미 있는 이름은 덮지 않는다
+      // (섀도잉된 필드는 파생 쪽이 직렬화된다).
+      if (!types.has(f.name)) types.set(f.name, f.type ?? null);
+    }
     if (seen.has(cur.fullName)) break;
     seen.add(cur.fullName);
 
@@ -938,7 +944,7 @@ function collectFieldNames(sym, info) {
     if (!next) break;         // 인덱스 밖 어셈블리(패키지 등)에서 끊겼다
     cur = next;
   }
-  return { names, complete };
+  return { names, types, complete };
 }
 
 // 심볼 인덱스에 없지만 정상인 키. UnityEngine.Object/Behaviour 가 가진 것으로, 사용자 어셈블리
@@ -948,17 +954,28 @@ const UNITY_BASE_KEYS = new Set(['m_Enabled', 'm_Name', 'serializedVersion']);
 
 /** 직렬화된 키가 실제 타입의 필드와 맞는가. 안 맞는 키는 이름이 바뀌었거나 남은 찌꺼기다. */
 function checkFields(sym, info, values) {
-  const { names, complete } = collectFieldNames(sym, info);
+  const { names, types, complete } = collectFieldNames(sym, info);
   const unknown = [];
+  // 직렬화된 키의 **선언 타입**. 필드 서명 디코딩(97e77da)이 생기기 전에는 낼 수 없었다.
+  // 이게 있어야 값을 검증할 수 있고, 어떤 키가 오브젝트 참조를 담는 필드인지 알 수 있다.
+  // 값 자체를 판정하지는 않는다 - Unity 의 직렬화 매핑을 추측하지 않고, 타입을 그대로 싣는다.
+  const declaredTypes = {};
   let matched = 0;
+  let untypedCount = 0;
   for (const k of Object.keys(values)) {
     if (UNITY_BASE_KEYS.has(k) || COMPONENT_NOISE_KEYS.has(k)) continue;
     // 자동 속성은 컴파일러가 <Name>k__BackingField 로 만들고 Unity 도 그 이름으로 직렬화한다.
-    if (names.has(k)) matched++;
-    else unknown.push(k);
+    if (names.has(k)) {
+      matched++;
+      const ty = types.get(k);
+      if (ty) declaredTypes[k] = ty;
+      else untypedCount++;
+    } else unknown.push(k);
   }
   return {
     matchedFieldCount: matched,
+    declaredTypes,
+    ...(untypedCount ? { untypedFieldCount: untypedCount } : {}),
     unknownKeys: unknown,
     baseChainComplete: complete,
     note: unknown.length === 0
