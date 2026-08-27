@@ -438,6 +438,32 @@ function resolveMethodKey(index, query) {
   const q = String(query || '').trim();
   if (!q) return { error: 'method is required' };
 
+  // 시그니처 키(`Type::Method(int,string)`)를 **먼저** 본다. 그걸로 물으면 오버로드가
+  // 정확히 하나로 지목되므로 병합 경고가 필요 없다.
+  //
+  // ⚠️ 키를 쪼갤 때는 **마지막** '(' 를 쓴다. 명시적 인터페이스 구현의 메서드 이름에는
+  // 괄호가 들어간다(실측: `IEnumerable<(System.Type,System.Type)>.GetEnumerator`).
+  // 파라미터 타입에는 괄호가 안 나오므로(튜플은 System.ValueTuple<> 로 렌더링)
+  // 마지막 '(' 는 항상 인자 목록의 시작이다.
+  if (q.endsWith(')')) {
+    const sigKeys = new Set([...(cg.callsFromSig || new Map()).keys(),
+                             ...(cg.callersOfSig || new Map()).keys()]);
+    if (sigKeys.has(q)) return { key: q, isSignatureKey: true };
+    // 괄호를 붙였는데 없는 오버로드다. 이름 키로 조용히 떨어뜨리면 **다른 오버로드의
+    // 답**이 나간다 - 물어본 것과 다른 것에 답하는 형태다. 여기서 끊고 후보를 준다.
+    const nameKey = q.slice(0, q.lastIndexOf('('));
+    const cands = [...sigKeys].filter(k => k.startsWith(nameKey + '('));
+    return {
+      error: `No overload '${q}' in the call graph.` +
+             (cands.length
+               ? ` Existing overloads: ${cands.slice(0, 8).join(', ')}` +
+                 (cands.length > 8 ? `, ... (${cands.length} total)` : '')
+               : ` No signature-keyed overload of '${nameKey}' is in the graph either — the graph only ` +
+                 'covers calls between user-assembly types, and an overload nobody calls has no key.'),
+      candidates: cands.slice(0, 25),
+    };
+  }
+
   const allKeys = new Set([...cg.callsFrom.keys(), ...cg.callersOf.keys()]);
 
   if (allKeys.has(q)) return { key: q };
@@ -597,9 +623,25 @@ function findCallers(index, args) {
   const r = resolveMethodKey(index, args.method);
   if (r.error) return r;
 
-  const set = index.callGraph.callersOf.get(r.key);
+  const cgx = index.callGraph;
+  const set = r.isSignatureKey
+    ? (cgx.callersOfSig ? cgx.callersOfSig.get(r.key) : null)
+    : cgx.callersOf.get(r.key);
   const callers = set ? [...set].sort() : [];
   const page = pageOf(callers, args.offset, args.maxResults);
+
+  // 이름으로 물었을 때 **오버로드별 분해**를 함께 준다. 예전에는 합계만 나가서
+  // `BaseAttack::TryResolveHit` 의 호출자 8개가 선언 4개에 어떻게 흩어져 있는지
+  // 알 방법이 없었다.
+  const perOverload = [];
+  if (!r.isSignatureKey && cgx.callersOfSig) {
+    const prefix = r.key + '(';
+    for (const [k, v] of cgx.callersOfSig) {
+      if (!k.startsWith(prefix)) continue;
+      perOverload.push({ key: k, signature: k.slice(k.lastIndexOf('(')), callerCount: v.size });
+    }
+    perOverload.sort((a, b) => b.callerCount - a.callerCount || a.signature.localeCompare(b.signature));
+  }
 
   const methodName = r.key.slice(r.key.indexOf('::') + 2);
   const typeName = r.key.slice(0, r.key.indexOf('::'));
@@ -611,6 +653,14 @@ function findCallers(index, args) {
 
   return {
     method: r.key,
+    ...(r.isSignatureKey ? { resolvedBy: 'signature key — exactly one overload' } : {}),
+    ...(perOverload.length > 1 ? {
+      perOverload,
+      perOverloadNote:
+        'Callers above are the union across these overloads. Each key is queryable — pass it as method ' +
+        'to get that overload alone. Sums can exceed the union: one caller can call several overloads, ' +
+        'and an overloaded caller appears once per its own signature.',
+    } : {}),
     // 호출 그래프에 엣지가 없어 **선언에서** 해석한 경우. 호출자 0 의 뜻이 다르다 —
     // "호출자를 찾았고 0" 이 아니라 "이 메서드는 IL 그래프에 아예 없다" 다.
     ...(r.declaredOnly ? {
