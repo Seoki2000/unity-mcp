@@ -1,5 +1,12 @@
 # Unity MCP Server - Technical Documentation
 
+> ⚠️ **Historical document — describes upstream 2.0.0, not this fork.**
+> It lists "27 tools total" and does not cover the fork's bridge-side index. The current fork is
+> package `2.3.0-dev.0.0.6` and a client sees **85 tools** (73 from the Editor + 12 from the bridge).
+> For current numbers and behaviour read [README.md](README.md) and, for the working log,
+> [HANDOFF.md](HANDOFF.md). Kept because its JSON-RPC and tool-registration description is still
+> accurate for the Editor half.
+
 ## Overview
 
 The Unity MCP (Model Context Protocol) Server is a C# package that enables AI agents (like Antigravity, Claude, Cursor) to query and control the Unity Editor through a standardized JSON-RPC 2.0 interface.

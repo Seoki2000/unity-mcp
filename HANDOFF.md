@@ -94,7 +94,7 @@ dev-0.0.2 절(§8), 독립 감사 절(§9), 레이어 D 절(§10), 라이브 교
 |---|---|
 | 리포 | 워킹트리 깨끗, 브랜치 `optimized`. P3-a 작업분은 **`8f80fce` 부터 이 파일의 마지막 커밋까지** — 정확한 HEAD 는 `git log --oneline` 으로 볼 것. 여기에 HEAD 해시를 적으면 그 커밋 자신 때문에 항상 낡는다(P2 때 같은 정정을 한 번 했다) |
 | **Unity** | **켜져 있었다.** 세션 끝에 그대로 두었으니 꺼져 있으면 다시 켤 것 |
-| 인덱스 캐시 | 버전 11, 참조 엣지 **6,305**, `duplicateTypes` 123 보존. **이제 매 호출 신선도 검증됨** |
+| 인덱스 캐시 | **버전 12**, 참조 엣지 **6,305**, `duplicateTypes` 123 보존. **이제 매 호출 신선도 검증됨** |
 | `tools/list` | **85개 / 43,368 B** — P3-b 가 **+1,226 B**(정규화 후 실측. 정의 원본은 1,250 B, 약 331 ±99 토큰/세션). 그 전까지는 전부 도구 0개 추가였다 |
 | 프로브 | `probe-error-impact` **14/14** · `probe-overloads` **10/10** · `probe-field-types` **8/8** · `probe-nested-types` **8/8** · `probe-method-lines` **7/7** · `probe-verify-loop` **7/7** · `probe-impact-analysis` **10/10** · `probe-project-map` 통과 |
 
@@ -285,7 +285,7 @@ dotnet build-server shutdown
 `unity_find_component_usages` / `unity_find_missing_scripts` / `unity_get_type_symbols` /
 `unity_find_callers` / `unity_find_callees` / `unity_get_asset_components` /
 `unity_project_map` / `unity_impact_analysis`
-→ `tools/list` 총 84개 (Unity 73 + 로컬 11), **42,142 B**
+→ `tools/list` 총 **85개** (Unity 73 + 로컬 12), **43,368 B** (배열 기준. 응답 줄 43,412 B)
 (레이어 D 시점 82개 / 39,669 B — P1 +1,236 B, P2 +1,237 B, 합계 ≈ +670 토큰/세션)
 
 ---
@@ -928,7 +928,8 @@ curl -s -X POST http://127.0.0.1:3000/message \
   (본문 시작 132/155/167/178, 선언 130/153/165/176). `declarations` 가 4개로 나와야 한다.
   `Unit::TakeDamage` 는 선언 2개(62, 147)에 호출자 9개
 - IL 디코딩 실패 **0**, 엣지 **8,673**
-- 참조 엣지 **6,267** = `guid:` 형태 + 맨 GUID **18** + `.meta` **122** + 기타 텍스트 **83** + 경로 로드 **23**
+- 참조 엣지 **6,305** = 위 분해는 6,267 시점의 것이다(ProjectSettings 를 스캔 루트에 넣기 전).
+  분해: `guid:` 형태 + 맨 GUID **18** + `.meta` **122** + 기타 텍스트 **83** + 경로 로드 **23**
   - 자기 참조 **0** (에셋이 자기 GUID 를 적어둔 것은 참조가 아니다)
   - 텍스트 일치로만 얻은 대상(`weakRefs`) **58**
 - 값 파서 전수: 문서 **69,891**, 못 읽은 줄 **0**, 상한에 걸린 문서 **24**, 정규식 대조군 누락 **0**

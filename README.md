@@ -33,6 +33,9 @@ repo; a bridge launcher that resolves `PackageCache` at run time. Tools: **67 �
 | dev-0.0.5 | 42,142 | 84 | 501.7 |
 | **dev-0.0.6** | **43,368** | **85** | **510.2** |
 
+Bytes are the `tools` **array** serialized as UTF-8. The full JSON-RPC response line is 43,412 B and
+the on-disk `tools-cache.json` is 43,415 B (it wraps the array with `savedAt`).
+
 That is **+73.7%** over the old pin — roughly +3,000 tokens per session. dev-0.0.1 claws
 back 3,309 B of it losslessly by omitting annotation hints that equal the MCP spec defaults.
 Note `destructiveHint` defaults to **true**, so omitting a `false` would flip a safe tool
@@ -135,7 +138,7 @@ const-path loads from code, `ProjectSettings` and build-scene membership, and at
 points. No total is computed, because the axes fail differently: the compiler catches a code
 caller, an Inspector wiring breaks silently, and a type-name string breaks with no diagnostic at
 all. `unknown` ships in every response — 44 unresolved dynamic load sites, no implements-list for
-53 interfaces, 1,864 edges leaving the index, 681 unread binaries, merged overloads, 123 colliding
+53 interfaces, 1,864 edges leaving the index, 681 unread binaries, name-key overload merging, 123 colliding
 nested type names, and disk-only state — because zero on every axis is not proof. Transitive depth
 is explicit (`depth`, default 1; measured caller fan-out on a 120-method sample: level 1 median 1 /
 p90 3 / max 59, level 2 median 1 / p90 5 / max 76). Cost: `tools/list` 40,905 -> 42,142 B, warm
@@ -158,9 +161,13 @@ consumer gave it one within a day.
 
 **Known limits:** references assembled at run time (`Resources.Load(dir + name)`, Addressables
 addresses) stay invisible — 44 such call sites here, and a zero result reports that count; no
-incremental index refresh (call `unity_index_rebuild` after asset changes);
+true incremental index refresh — a stale index is rebuilt whole (4.8 s cold), not diffed. Since
+dev-0.0.6 you no longer need to call `unity_index_rebuild` by hand: `ensureIndex` revalidates on
+every call (assembly signature 11-18 ms each call, asset fingerprint throttled to 10 s);
 `totalReferenceCount` counts (asset, GUID) pairs, not raw occurrences; `unity_find_callers`
-indexes project-internal calls only and merges overloads under `Type::Method`; component
+indexes project-internal calls only. The name key still merges overloads under `Type::Method`,
+but since dev-0.0.6 a signature-keyed graph sits beside it: pass `Type::Method(int,string)` to
+address one overload, or read `perOverload` on a name query. Component
 values are re-parsed per query (4 ms for a typical prefab, 0.7 s for the largest 17 MB one);
 package scripts have no symbols, so 5,554 of 7,019 script components resolve to `null` rather
 than a type name; `tools/list` is still larger than in `2ea969e`.
