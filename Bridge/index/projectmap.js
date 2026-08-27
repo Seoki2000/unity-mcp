@@ -28,6 +28,8 @@
 
 const { spawnSync } = require('child_process');
 const path = require('path');
+const scan = require('./scan');
+const mkey = require('./methodkey');
 
 let log = () => {};
 function setLogger(fn) { log = fn; }
@@ -126,10 +128,8 @@ function readGitFileHistory(root) {
 // 축 계산
 // ---------------------------------------------------------------------------
 
-function typeOfKey(key) {
-  const i = key.indexOf('::');
-  return i < 0 ? key : key.slice(0, i);
-}
+// impact.js 에 있던 같은 함수와 합쳤다(methodkey.typeOf).
+const typeOfKey = mkey.typeOf;
 
 function buildAxes(index) {
   const sym = index.symbols;
@@ -246,25 +246,8 @@ function buildAxes(index) {
 // 씬을 "타입이 많은 순" 으로만 내면 저자의 의도가 안 보인다 — 빌드 목록은 사람이 적은 순서다.
 // 다만 **"프로덕션" 이라고 부르면 안 된다**: 이 프로젝트는 활성 13개 중에 `Dev_Boot`,
 // `PlayerDashTest`, `MonsterScene` 같은 개발/테스트 씬이 섞여 있다. enabled 플래그를 그대로 싣는다.
-function readBuildScenes(root) {
-  const fs = require('fs');
-  const p = path.join(root, 'ProjectSettings', 'EditorBuildSettings.asset');
-  let text;
-  try { text = fs.readFileSync(p, 'utf8'); } catch (e) { return null; }
-
-  const out = [];
-  let enabled = null;
-  for (const line of text.split(/\r?\n/)) {
-    let m = /^\s*-\s*enabled:\s*(\d)/.exec(line);
-    if (m) { enabled = m[1] === '1'; continue; }
-    m = /^\s*path:\s*(.+?)\s*$/.exec(line);
-    if (m && enabled !== null) {
-      if (m[1]) out.push({ index: out.length, path: m[1], enabled });
-      enabled = null;
-    }
-  }
-  return out;
-}
+// readBuildScenes 는 scan.js 로 합쳤다 — 여기와 impact.js 에 같은 구현이 두 벌 있었다.
+const readBuildScenes = scan.readBuildScenes;
 
 // ---------------------------------------------------------------------------
 // 본체

@@ -467,6 +467,39 @@ function sameAssemblySignature(a, b) {
          a.hash === b.hash && a.maxMtimeMs === b.maxMtimeMs;
 }
 
+const NL_RE = new RegExp("\\r?\\n");
+const ENABLED_RE = new RegExp("^\\s*-\\s*enabled:\\s*(\\d)");
+const PATH_RE = new RegExp("^\\s*path:\\s*(.+?)\\s*$");
+
+/**
+ * `ProjectSettings/EditorBuildSettings.asset` 의 빌드 씬 목록.
+ *
+ * 왜 여기 있나 — `impact.js` 와 `projectmap.js` 에 **글자 그대로 같은 구현**이 있었다
+ * (18줄 / 19줄, 임시 경로 변수 하나만 달랐다). 빌드 씬 판정은 "이 씬이 실제로 빌드에
+ * 들어가나" 라는 답의 근거이므로, 두 도구가 서로 다르게 읽기 시작하면 같은 프로젝트에
+ * 대해 다른 답이 나간다.
+ *
+ * 읽을 수 없으면 **null** 이다 — 빈 배열로 돌려주면 "빌드 씬이 없다" 로 읽힌다.
+ */
+function readBuildScenes(root) {
+  const p = path.join(root, 'ProjectSettings', 'EditorBuildSettings.asset');
+  let text;
+  try { text = fs.readFileSync(p, 'utf8'); } catch { return null; }
+
+  const out = [];
+  let enabled = null;
+  for (const line of text.split(NL_RE)) {
+    let m = ENABLED_RE.exec(line);
+    if (m) { enabled = m[1] === '1'; continue; }
+    m = PATH_RE.exec(line);
+    if (m && enabled !== null) {
+      if (m[1]) out.push({ index: out.length, path: m[1], enabled });
+      enabled = null;
+    }
+  }
+  return out;
+}
+
 function fingerprintFrom(metaFiles, yamlFiles, otherFiles) {
   let maxMtimeMs = 0;
   let totalBytes = 0;
@@ -660,5 +693,5 @@ function mergePackageCacheGuids(index) {
 
 module.exports = {
   buildIndex, collectFiles, buildMetaIndex, buildYamlIndex, mergePackageCacheGuids,
-  fingerprint, fingerprintFrom, assemblySignature, sameAssemblySignature, YAML_EXT, rel,
+  fingerprint, fingerprintFrom, assemblySignature, sameAssemblySignature, readBuildScenes, YAML_EXT, rel,
 };

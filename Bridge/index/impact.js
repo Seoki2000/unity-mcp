@@ -23,6 +23,8 @@
  */
 
 const path = require('path');
+const scan = require('./scan');
+const mkey = require('./methodkey');
 
 let log = () => {};
 function setLogger(fn) { log = fn; }
@@ -33,10 +35,8 @@ const MAX_DEPTH = 3;
 
 const GENERATED_TYPE = /[<>]|^__|^UnitySourceGeneratedAssembly|(^|\.)MonoScriptData$|(^|\.)NameOf$|^__GEN\./;
 
-function typeOfKey(key) {
-  const i = key.indexOf('::');
-  return i < 0 ? key : key.slice(0, i);
-}
+// typeOfKey 는 methodkey 로 옮겼다 — projectmap.js 에 글자 그대로 같은 사본이 있었다.
+const typeOfKey = mkey.typeOf;
 
 /** 배열을 상한까지 자르고 몇 개를 접었는지 같이 돌려준다. 조용히 자르지 않는다. */
 function cap(list, max) {
@@ -54,7 +54,7 @@ function resolveTarget(index, raw) {
   const t = String(raw).trim();
 
   if (t.indexOf('::') >= 0) {
-    const [ty, m] = [typeOfKey(t), t.slice(t.indexOf('::') + 2)];
+    const [ty, m] = [mkey.typeOf(t), mkey.methodOf(t)];
     const info = sym ? sym.typeByFullName.get(ty) : null;
     return { kind: 'method', type: ty, method: m, key: t, typeInfo: info || null };
   }
@@ -579,23 +579,7 @@ function buildImpact(index, args) {
 }
 
 // P1 과 같은 파일을 읽는다. 여기서 다시 읽는 이유는 영향 분석이 P1 없이도 동작해야 하기 때문이다.
-function readBuildScenes(root) {
-  const fs = require('fs');
-  let text;
-  try { text = fs.readFileSync(path.join(root, 'ProjectSettings', 'EditorBuildSettings.asset'), 'utf8'); }
-  catch (e) { return null; }
-  const out = [];
-  let enabled = null;
-  for (const line of text.split(/\r?\n/)) {
-    let m = /^\s*-\s*enabled:\s*(\d)/.exec(line);
-    if (m) { enabled = m[1] === '1'; continue; }
-    m = /^\s*path:\s*(.+?)\s*$/.exec(line);
-    if (m && enabled !== null) {
-      if (m[1]) out.push({ index: out.length, path: m[1], enabled });
-      enabled = null;
-    }
-  }
-  return out;
-}
+// readBuildScenes 는 scan.js 로 합쳤다 — 여기와 projectmap.js 에 같은 구현이 두 벌 있었다.
+const readBuildScenes = scan.readBuildScenes;
 
 module.exports = { buildImpact, setLogger, resolveTarget };

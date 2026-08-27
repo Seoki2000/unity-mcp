@@ -15,6 +15,7 @@
 
 const fs = require('fs');
 const path = require('path');
+const mkey = require('./methodkey');
 
 const MAX_ERRORS = 50;
 const BS = String.fromCharCode(92);   // 역슬래시 리터럴을 소스에 두지 않는다
@@ -216,7 +217,7 @@ function explain(index, args, meta) {
         'No method body span covers or follows this line (file-level or type-level location).';
     }
 
-    const primary = row.method ? row.method.key.slice(0, row.method.key.indexOf('::')) : typeNames[0];
+    const primary = row.method ? mkey.typeOf(row.method.key) : typeNames[0];
     const info = sym.typeByFullName.get(primary);
     row.type = info
       ? {

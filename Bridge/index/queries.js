@@ -4,6 +4,7 @@
 
 const fs = require('fs');
 const path = require('path');
+const mkey = require('./methodkey');
 const { YAML_EXT } = require('./scan');
 const yaml = require('./yamlvalues');
 
@@ -451,7 +452,7 @@ function resolveMethodKey(index, query) {
     if (sigKeys.has(q)) return { key: q, isSignatureKey: true };
     // 괄호를 붙였는데 없는 오버로드다. 이름 키로 조용히 떨어뜨리면 **다른 오버로드의
     // 답**이 나간다 - 물어본 것과 다른 것에 답하는 형태다. 여기서 끊고 후보를 준다.
-    const nameKey = q.slice(0, q.lastIndexOf('('));
+    const nameKey = mkey.toNameKey(q);
     const cands = [...sigKeys].filter(k => k.startsWith(nameKey + '('));
     return {
       error: `No overload '${q}' in the call graph.` +
@@ -559,7 +560,7 @@ function inspectorWiringsFor(index, key, methodName) {
     // 독립 감사 지적): 3건이 `TempGameManager` 를 적어두고 조인으로 `GameManager` 에 붙었다.
     // 이름 변경을 판단할 때 알아야 하는 사실이라 응답에 남긴다 — 그 행들은 이미 낡았다.
     const declaredBy = new Map();
-    const mName = key.slice(key.indexOf('::') + 2);
+    const mName = mkey.methodOf(key);
     for (const e of (w.byMethod.get(mName) || [])) {
       if (e && e.declaredType && e.type && e.declaredType !== e.type) declaredBy.set(e.asset, e.declaredType);
     }
@@ -638,7 +639,7 @@ function findCallers(index, args) {
     const prefix = r.key + '(';
     for (const [k, v] of cgx.callersOfSig) {
       if (!k.startsWith(prefix)) continue;
-      perOverload.push({ key: k, signature: k.slice(k.lastIndexOf('(')), callerCount: v.size });
+      perOverload.push({ key: k, signature: mkey.paramsOf(k), callerCount: v.size });
     }
     perOverload.sort((a, b) => b.callerCount - a.callerCount || a.signature.localeCompare(b.signature));
   }
@@ -648,13 +649,8 @@ function findCallers(index, args) {
   // 그러면 속성·선언·인스펙터 배선 조회가 **전부 빈 결과**로 돌아온다 — 호출자 수는 맞는데
   // 안전 축만 조용히 사라진다. 실측으로 걸렸다: `DevBuildSceneList::LogCurrentList` 는
   // 이름으로 물으면 속성 1개(진입점 증거)가 나오지만 시그니처 키로는 0개였다.
-  const typeName = r.key.slice(0, r.key.indexOf('::'));
-  const methodName = (() => {
-    const raw = r.key.slice(r.key.indexOf('::') + 2);
-    if (!r.isSignatureKey) return raw;
-    const lp = raw.lastIndexOf('(');
-    return lp > 0 ? raw.slice(0, lp) : raw;
-  })();
+  const typeName = mkey.typeOf(r.key);
+  const methodName = mkey.methodOf(r.key);
   const wirings = inspectorWiringsFor(index, r.key, methodName);
   const attributes = methodAttributesFor(index, typeName, methodName);
   // 이 키가 실제로 선언 몇 개를 덮는가. 지금까지 오버로드 경고는 **정적 상투구**여서
