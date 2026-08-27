@@ -18,6 +18,7 @@ const wiring = require('./wiring');
 const queries = require('./queries');
 const projectmap = require('./projectmap');
 const impact = require('./impact');
+const errorimpact = require('./errorimpact');
 
 const PREFIX = 'unity_index_';   // 상태/재빌드 도구
 const LOCAL_TOOL_NAMES = new Set([
@@ -32,6 +33,7 @@ const LOCAL_TOOL_NAMES = new Set([
   'unity_get_asset_components',
   'unity_project_map',
   'unity_impact_analysis',
+  'unity_explain_compile_errors',
 ]);
 
 let _index = null;
@@ -581,6 +583,35 @@ function toolDefinitions() {
       },
       annotations: ro,
     },
+    {
+      name: 'unity_explain_compile_errors',
+      description:
+        'Join compiler diagnostics you already have to the project index: which method and type each ' +
+        'error sits in, who calls that method, which prefabs/scenes carry the type, and whether the ' +
+        'file is yours or a package. Pass the errors array from unity_get_compilation_status. Runs ' +
+        'entirely in the bridge, so it answers while Unity is compiling or reloading. Reports its own ' +
+        'staleness: Unity does not rebuild assemblies when compilation fails, so during a failure the ' +
+        'graph describes the last good build and a newly added symbol is absent - pass hadErrors so ' +
+        'the response says so instead of implying the join is current.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          errors: {
+            type: 'array',
+            items: {
+              type: 'object',
+              properties: { file: { type: 'string' }, line: { type: 'integer' }, message: { type: 'string' } },
+              required: ['file'],
+            },
+          },
+          hadErrors: { type: 'boolean', description: 'hasErrors from the status call; sets the freshness label' },
+          compilationGeneration: { type: 'integer' },
+          maxErrors: { type: 'integer', description: 'Cap on analysed errors (default and max 50); omitted count is reported' },
+        },
+        required: ['errors'],
+      },
+      annotations: ro,
+    }
   ];
 }
 
@@ -600,6 +631,12 @@ function callLocalTool(name, args, port) {
       });
     }
     return ok({ ...queries.status(idx, _meta), cacheAvailable: true, freshness: _freshness() });
+  }
+
+  if (name === 'unity_explain_compile_errors') {
+    const idx = ensureIndex(port, false, false);
+    if (!idx) return err(_buildError || 'Index unavailable.');
+    return ok(errorimpact.explain(idx, a, { ..._meta, projectRoot: _projectRoot }));
   }
 
   if (name === 'unity_index_rebuild') {
