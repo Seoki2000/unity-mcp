@@ -1,6 +1,6 @@
 # 작업 인수 (다음 세션용)
 
-최종 갱신: 2026-08-27 (P3-a·SequencePoints·search folder·중첩 타입·P3-b·필드 서명·**오버로드 분리**)
+최종 갱신: 2026-08-27 (§0.5 백로그 전부 소진 — P3-a/b·SequencePoints·중첩 타입·필드 서명·오버로드·effectByOperation 실검증)
 브랜치: `optimized` — 정본. 원격과 동기화돼 있다. 지난 작업 브랜치들을 fast-forward 머지해 합치고 지웠다.
 게임 프로젝트의 핀은 `9d420e6`(이 브랜치의 조상)을 가리킨다.
 **`main` 이 아니다. §1 주의사항 참조**
@@ -96,7 +96,7 @@ dev-0.0.2 절(§8), 독립 감사 절(§9), 레이어 D 절(§10), 라이브 교
 | **Unity** | **켜져 있었다.** 세션 끝에 그대로 두었으니 꺼져 있으면 다시 켤 것 |
 | 인덱스 캐시 | 버전 11, 참조 엣지 **6,305**, `duplicateTypes` 123 보존. **이제 매 호출 신선도 검증됨** |
 | `tools/list` | **85개 / 43,392 B** — P3-b 가 +1,250 B(약 338 ±101 토큰/세션). 그 전까지는 전부 도구 0개 추가였다 |
-| 프로브 | `probe-overloads` **10/10** · `probe-field-types` **8/8** · `probe-error-impact` **11/11** · `probe-nested-types` **8/8** · `probe-method-lines` **7/7** · `probe-verify-loop` **7/7** · `probe-impact-analysis` **10/10** · `probe-project-map` 통과 |
+| 프로브 | `probe-error-impact` **14/14** · `probe-overloads` **10/10** · `probe-field-types` **8/8** · `probe-error-impact` **11/11** · `probe-nested-types` **8/8** · `probe-method-lines` **7/7** · `probe-verify-loop` **7/7** · `probe-impact-analysis` **10/10** · `probe-project-map` 통과 |
 
 기동 명령과 준비 확인은 이 절 아래 "Unity 를 켤 때 알아 둘 것" 에 있다.
 
@@ -114,6 +114,9 @@ dev-0.0.2 절(§8), 독립 감사 절(§9), 레이어 D 절(§10), 라이브 교
 | 인덱스에 줄번호->메서드 | **생겼다**(2026-08-27, `d0714ad`). 단 `line` 은 **본문 시작**이지 시그니처 줄이 아니다 — 포함 검사로 쓰면 시그니처 오류가 범위 밖이다 |
 | 오버로드 | 키는 여전히 합쳐지지만 **몇 개인지·어디인지 응답이 말한다.** `BaseAttack::TryResolveHit` 호출자 8개 = 오버로드 **4개**의 합계(디스크 확인) |
 | 절대경로 입력 | 조용한 0 이 아니라 명시적 에러(`Could not resolve ... to a GUID`) |
+| `effectByOperation` | **실검증됨**(2026-08-27). 세 주장 모두 참: CS1061 이 호출자를 짚는다 / 배선은 컴파일러·콘솔·Editor.log 전부 침묵 / 클래스만 바꿔도 부착은 살아남는다 |
+| 줄 귀속 확신도 | 본문시작-선언줄 거리 중앙 **2** / 최대 5 (표본 276) -> 위로 8줄 스캔으로 `signature` 승급 |
+| Missing Script | 14 GUID / 164 참조 = 자기 코드 **3개/132** + 서드파티·테스트 **11개/32**. §5 전수 분류 |
 | 오버로드 실제 규모 | 선언 2개 이상 키 **146**, 오버로드된 키를 향하는 엣지 **366/8,673 = 4.2%**, 영향 키 101(상위는 벤더) |
 | 시그니처 그래프 | 시그 엣지 **8,848** / 타깃 4,443 / **미해석 0**. 이름 엣지 8,673 보다 많은 것이 정상 |
 | 키 형태 함정 | 명시적 인터페이스 구현의 **이름에 괄호가 들어간다**. 키는 반드시 **마지막 `(`** 로 쪼갤 것 |
@@ -130,7 +133,8 @@ dev-0.0.2 절(§8), 독립 감사 절(§9), 레이어 D 절(§10), 라이브 교
 계측기 넷. 새 기능을 만들 때 **먼저 여기에 질문을 추가**한다:
 - `Tools/probe-overloads.js` — 오버로드 분리 프로브 10개 (신규)
 - `Tools/probe-field-types.js` — 필드 타입 서명 프로브 8개
-- `Tools/probe-error-impact.js` — P3-b 조인 프로브 11개
+- `Tools/probe-error-impact.js` — P3-b 조인 프로브 14개
+- `Tools/verify-effect-by-operation.md` — `effectByOperation` 실검증 하네스(절차와 관측 기록)
 - `Tools/probe-nested-types.js` — 중첩 타입 신원 프로브 8개 (신규)
 - `Tools/probe-method-lines.js` — 메서드 위치·오버로드 가시성 프로브 7개
 - `Tools/probe-verify-loop.js` — 신선도·절단 프로브 7개
@@ -138,30 +142,29 @@ dev-0.0.2 절(§8), 독립 감사 절(§9), 레이어 D 절(§10), 라이브 교
 - `Tools/probe-impact-analysis.js` — 영향 분석 프로브 10개
 - `Editor/Debug/DependencyCrossCheck.cs` — 메뉴 `Window/MCP Dependency Cross-Check`
 
-### 다음 작업 — 백로그가 소진됐다. 남은 것은 전부 새 판단이다
+### 다음 작업 — 백로그가 비었다
 
-2026-08-27 세션이 §0.5 에 적혀 있던 선택 항목 **1·2·3 을 전부 했다**(사용자 지시).
-Phase 3 로드맵도, 그 아래 부채 목록도 지금은 비어 있다.
+2026-08-27 세션이 §0.5 에 적혀 있던 선택 항목을 **전부 했다**(사용자 지시).
+Phase 3 로드맵, 정확도 부채, 중복 제거, P3-b, 그 뒤 나온 후속 항목까지 남은 것이 없다.
 
-**남아 있는 것 (전부 선택):**
+이 세션에 끝낸 것: P3-a(진단 정직성 + 인덱스 신선도) · PDB SequencePoints ·
+`search_project` folder 버그 · 중첩 타입 신원 · P3-b(진단 x 인덱스 조인) ·
+필드 타입 서명 디코딩 · 오버로드 분리 · P3-b 줄 귀속 정밀화 ·
+`effectByOperation` 실검증 · Missing Script 전수 분류.
 
-1. **여기서 닫는다.** 지금 도구들은 모르는 것을 "모른다" 고 답한다
-2. **오버로드 진짜 분리** — 지금은 모호성을 *드러내기만* 한다(`declarations` 로 선언 수와
-   위치). 키를 실제로 나누려면 **메서드 시그니처 디코딩**(ECMA-335 II.23.2.1)이 필요하고,
-   그건 호출 그래프 키를 바꾼다. "이름 바꿀 수 있나" 에는 현재로도 충분하다
-3. **필드 타입 서명 디코딩** — 값 검증과 참조 필드 해석. 위와 같은 재료(시그니처 파서)
-4. **`effectByOperation` 실검증** — 워크트리 복사본에 변형을 적용하고 재컴파일해 관측한다.
-   **P3-b 로 재료가 절반 생겼다** — 이제 진단을 받아 영향을 낼 수 있으므로, 남은 것은
-   변형을 가하는 하네스다
-5. **Missing Script 실제 정리** — 14 GUID / 134 에셋 / 164 참조. 도구 작업이 아니라 판단이다
-6. **P3-b 의 줄 귀속 정밀화** — `inferred` 를 줄이려면 시그니처 줄까지 범위를 넓혀야 한다.
-   선언 줄은 PDB 에 없으므로 소스를 읽거나(비용) 앞 메서드 끝 + 1 로 잡는 규칙이 필요하다
+**남아 있는 것 (전부 새 판단이 필요하다):**
 
-**착수 조건을 하나 어겼다는 기록.** P3-b 의 조건 중 "클라이언트 팬아웃이 실제로 아픈지
-관측할 것. 아프지 않으면 만들지 않는다" 는 **충족하지 않았다.** 사용자가 만들라고 지시했고,
-측정이 아니라 지시로 문을 열었다. 지금 `tools/list` 가 85개 / 43,392 B 인 것의 근거는
-"필요하다고 측정됐다" 가 아니라 "지시받았다" 이다. 나중에 도구 경계를 다시 볼 때 이 사실이
-재료가 된다 — 아래 미결 결정과 같이 읽을 것.
+1. **여기서 닫는다.** 도구들은 모르는 것을 "모른다" 고 답한다
+2. **Missing Script 실제 정리** — §5 에 14개 전수 분류를 적었다. **지우는 것은 판단이고
+   이 세션은 아무것도 지우지 않았다.** A(자기 코드 3개/132참조)는 의도된 삭제였는지
+   사람이 알아야 하고, B(서드파티 11개/32참조)는 재임포트로 되돌아올 수 있다
+3. **`effectByOperation` 의 남은 연산** — `moveOrReimport` 와 `delete` 는 실검증하지
+   않았다. 하네스는 `Tools/verify-effect-by-operation.md` 에 있으니 같은 절차로 된다.
+   파일 하나에 MonoBehaviour 가 여럿일 때의 클래스 이름 변경도 안 덮었다
+4. **오버로드 키 교체** — 지금은 시그니처 그래프를 **병렬로** 뒀다. 이름 키를 실제로
+   교체하고 싶으면 근거 수치가 §0.5 확인표와 §3 에 있다(엣지 4.2%, 벤더 비중)
+5. **`unity_search_project` 를 인덱스 기반으로 교체** — folder 버그를 고치니 타임아웃이
+   사라져 교체 이유가 없어졌다(§3). 중복 자체를 없애려면 별도 판단
 
 ### 미결 결정 — 영향 분석의 도구 경계 (사용자 보류, 2026-08-26)
 
@@ -252,6 +255,8 @@ dotnet build-server shutdown
 | 3-부채2 | `97e77da` `cef6fd2` `25270a9` | 필드 타입 서명 디코딩(ECMA-335 II.23.2.12). 전 어셈블리 필드 105,972개 실패 0건. 값 검증 경로에 연결. 프로브 8/8 |
 | 3-P3b 수정 | `c0e6a04` | P3-b 가 붙은 에셋 수에 조용한 0 을 답하던 것(`scriptUsers` -> `scriptRefs`) |
 | 3-부채3 | `d4c853d` `7b486e7` `89cc59b` | 오버로드 분리 — 시그니처 키 그래프를 **병렬로**. 이름 키 불변. 프로브 10/10 |
+| 3-P3b+ | `f29dd3b` | P3-b 줄 귀속을 확신도 3단계로(exact/signature/gap). 프로브 14/14 |
+| 3-검증 | `d674950` | `effectByOperation` 실검증 — 세 주장 모두 참(내 예상 하나는 틀렸다). 하네스 문서화 |
 
 ### 인덱스 성능 (MainProject, Unity 6000.3.16f1) — 2026-08-24 재측정
 ```
@@ -833,6 +838,49 @@ component: "MonoBehaviour" }` 는 `WallSection_63` 에 붙은 그 컴포넌트�
 (MeshRenderer 참조들)이 **그대로 보존돼 있음**을 보여준다. 클래스를 복원하면 값이 살아난다는 뜻이다.
 
 판단 필요: 의도된 삭제면 프리팹 쪽 컴포넌트 정리, 아니면 클래스 복원.
+
+### 2026-08-27 전수 분류 — 14개 GUID / 164 참조
+
+지금까지 상위 3건만 정리돼 있었다. 나머지 11개(32 참조)를 처음으로 분류했다.
+근거는 원본 YAML 에서 뽑은 `m_EditorClassIdentifier` / `m_Name` / 보존된 필드 이름이다
+(산출물: `C:/dev/codex-p3/missing-evidence.json`).
+
+**A. 프로젝트 자기 코드 — 3개 GUID / 132 참조 (실제 문제)**
+
+| 참조 | ident | 보존된 필드 |
+|---|---|---|
+| 108 | `VeyTrace.Rendering.Occlusion.OcclusionSection` | `renderers`, `colliders` |
+| 12 | `VeyTrace.Rendering.Occlusion.ElevationLevel` | `contentRoot`, `contentRenderers` |
+| 12 | `VeyTrace.Rendering.Occlusion.ElevationStack` | (없음) |
+
+세 개가 **한 서브시스템**이다. 필드값이 살아 있으므로 클래스를 복원하면 배선도 살아난다.
+지우면 그 오소링 기록이 사라진다 — 되돌릴 수 없는 쪽이다.
+
+**B. 서드파티·테스트 잔여물 — 11개 GUID / 32 참조 (자기 코드 아님)**
+
+| 참조 | 무엇이었나 | 어디 |
+|---|---|---|
+| 12 | `rotateVector`, `rotateSpace` (회전 스크립트) | `50.Art/VFX/.../Portals/*` |
+| 5 | `waveFunction/amplitude/phase/frequency` (오실레이터) | 같은 Portals |
+| 5 | `version`, `hdPluginSubTargetMaterialVersions` | `.mat` — **HDRP** 플러그인 메타. 이 프로젝트는 URP 다 |
+| 3 | `ConvexMeshes`, `HashOfSourceMeshes` | `50.Art/MapGen/.../*_Convex.asset` (메시 캐시) |
+| 1 | (필드 없음) | `INab Studio/.../Character Fire.vfx` |
+| 1 | `TestAnimationCurveVolumeComponent` | `99.Settings/DefaultVolumeProfile.asset` |
+| 1 | `OasisFogVolumeComponent` | 같은 파일 |
+| 1 | `OutlineVolumeComponent` | 같은 파일 |
+| 1 | `TestVolume` | 같은 파일 |
+| 1 | `ScreenSpaceAmbientOcclusion` | `INab Studio/Common URP/URP Renderer.asset` |
+| 1 | `materialNameToModify`, `materialToModify` | `50.Art/TestAssets/KMKTestAssets/...` |
+
+`DefaultVolumeProfile.asset` 하나에 죽은 Volume 컴포넌트가 **4개** 있다 — 전부
+이름에 Test/Oasis/Outline 이 붙은 것이라 실험하다 남은 것으로 보인다.
+
+**⚠️ 2026-08-27 세션은 아무것도 지우지 않았다.** A 는 "의도된 삭제였나" 를 사람이
+알아야 하고(132 참조의 오소링이 걸려 있다), B 는 서드파티 에셋을 건드리는 일이라
+재임포트로 되돌아올 수 있다. 분류까지가 도구의 몫이고 그 다음은 판단이다.
+
+정리한다면 B 부터가 안전하다 — 특히 `DefaultVolumeProfile.asset` 의 죽은 Volume 4개는
+자기 코드와 무관하고 참조가 각 1건이다.
 
 ---
 
