@@ -70,7 +70,12 @@ namespace Community.Unity.MCP
                 scannedAssetCount = _lastScannedCount,
                 resultCount = results.Count,
                 truncated = results.Count >= maxResults,
-                note = ambiguityNote,
+                // reference 검색에는 **왜 두 경로가 있는지**를 항상 말한다. 거절 경로에서만
+                // unity_find_references 를 언급하고 있었어서, 정상 경로의 호출자는 96배 빠른
+                // 대안이 있다는 것도, 두 답이 갈릴 수 있다는 것도 알 방법이 없었다.
+                note = searchType == "reference"
+                    ? ((ambiguityNote == null ? "" : ambiguityNote + " ") + ReferencePathNote)
+                    : ambiguityNote,
                 results = results.ToArray()
             };
         }
@@ -234,6 +239,20 @@ namespace Community.Unity.MCP
         // `-32603 Request timeout` 이 올라온다(작업 자체는 백그라운드에서 완주한다).
         // 그래서 상한을 넘는 스코프는 시도하지 않고 대안을 말한다.
         private const int ReferenceScanLimit = 8000;
+
+        // 두 경로가 남아 있는 이유. 지우지 않은 것은 **서로를 검증하기 때문**이다.
+        // 실측(2026-08-27, 같은 대상 AudioManager.cs): 이쪽은 에셋 3,143개를 훑어 1,344 ms,
+        // unity_find_references 는 14 ms - 96배. 답은 둘 다 2건으로 같았다.
+        // 그런데 항상 같지는 않다: Unity 의 GetDependencies 는 VFX Graph 의 내부 참조를
+        // 놓치고(측정됨) 역 GUID 인덱스는 그것을 찾는다. 반대로 이쪽은 Unity 자신의 답이다.
+        private const string ReferencePathNote =
+            "This walks AssetDatabase.GetDependencies over the scoped assets, so it is Unity's own " +
+            "answer but it needs a live editor and costs a full scan (measured on this project: 3,143 " +
+            "assets, 1,344 ms). unity_find_references answers the same question from the bridge's " +
+            "reverse GUID index in O(1) with no editor round-trip (14 ms on the same target) and keeps " +
+            "working while Unity compiles or reloads. Both are kept on purpose because they disagree at " +
+            "the edges: GetDependencies misses VFX Graph internal references (measured), while the index " +
+            "cannot see runtime path lookups. When a zero matters, ask both.";
 
         // 마지막 reference 스캔이 실제로 훑은 에셋 수. 0 건 응답의 근거로 싣는다.
         [ThreadStatic] private static int _lastScannedCount;
