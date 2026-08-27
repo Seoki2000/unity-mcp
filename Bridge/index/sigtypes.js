@@ -1,4 +1,9 @@
-// ECMA-335 시그니처의 Type 인코딩 디코더 (II.23.2.12).
+// ECMA-335 시그니처 디코더 — **blob 압축 정수의 단일 출처**이기도 하다.
+// Type 인코딩(II.23.2.12) / FieldSig(II.23.2.4) / MethodDefSig(II.23.2.1).
+//
+// 2026-08-27 정리: 압축 정수 디코딩이 세 벌 있었다 — 여기의 uint,
+// symbols.js 의 blobUInt/blobInt, 그리고 symbols.js 의 Document 이름 루프 안 인라인 사본.
+// 한 곳을 고쳐도 나머지에 전파되지 않는 형태라 여기로 합쳤다.
 //
 // 왜 필요한가 — 지금까지 필드는 이름/접근자만 있고 **타입이 없었다.** 그래서
 // `unity_get_asset_components` 가 직렬화 값을 보여주면서도 그 값이 선언 타입에 맞는지
@@ -41,6 +46,23 @@ function uint(b, st) {
   if ((x & 0x40) === 0) { const v = ((x & 0x3f) << 8) | b[st.p + 1]; st.p += 2; return v; }
   const v = ((x & 0x1f) << 24) | (b[st.p + 1] << 16) | (b[st.p + 2] << 8) | b[st.p + 3];
   st.p += 4; return v;
+}
+
+/**
+ * blob 안의 압축 **부호있는** 정수. 최하위 비트가 부호이고 나머지를 오른쪽으로 민다.
+ * PDB 의 시퀀스 포인트 델타가 이 형태다.
+ */
+function sint(b, st) {
+  const x = b[st.p];
+  if (x === undefined) throw new Error('signature truncated');
+  let val, n, bits;
+  if ((x & 0x80) === 0) { val = x; n = 1; bits = 7; }
+  else if ((x & 0x40) === 0) { val = ((x & 0x3f) << 8) | b[st.p + 1]; n = 2; bits = 14; }
+  else { val = ((x & 0x1f) << 24) | (b[st.p + 1] << 16) | (b[st.p + 2] << 8) | b[st.p + 3]; n = 4; bits = 29; }
+  st.p += n;
+  const sign = val & 1;
+  const v = val >>> 1;
+  return sign ? v - (1 << (bits - 1)) : v;
 }
 
 /**
@@ -187,4 +209,4 @@ function methodSigKey(typeFull, methodName, params) {
   return typeFull + '::' + methodName + '(' + params.join(',') + ')';
 }
 
-module.exports = { decodeFieldSig, decodeMethodSig, methodSigKey, readType, uint, ET, PRIMITIVE };
+module.exports = { decodeFieldSig, decodeMethodSig, methodSigKey, readType, uint, sint, ET, PRIMITIVE };

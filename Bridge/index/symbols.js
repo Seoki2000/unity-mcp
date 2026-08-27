@@ -74,27 +74,10 @@ function toProjectRelative(root, absPath) {
 }
 
 /** Portable PDB → MethodDef 행 번호 → 소스 문서 경로(절대). */
-/** blob 안의 압축 부호없는 정수. ECMA-335 II.23.2. */
-function blobUInt(b, st) {
-  const x = b[st.p];
-  if ((x & 0x80) === 0) { st.p += 1; return x; }
-  if ((x & 0x40) === 0) { const v = ((x & 0x3f) << 8) | b[st.p + 1]; st.p += 2; return v; }
-  const v = ((x & 0x1f) << 24) | (b[st.p + 1] << 16) | (b[st.p + 2] << 8) | b[st.p + 3];
-  st.p += 4; return v;
-}
-
-/** blob 안의 압축 부호있는 정수. 최하위 비트가 부호이고 나머지를 오른쪽으로 민다. */
-function blobInt(b, st) {
-  const x = b[st.p];
-  let val, n, bits;
-  if ((x & 0x80) === 0) { val = x; n = 1; bits = 7; }
-  else if ((x & 0x40) === 0) { val = ((x & 0x3f) << 8) | b[st.p + 1]; n = 2; bits = 14; }
-  else { val = ((x & 0x1f) << 24) | (b[st.p + 1] << 16) | (b[st.p + 2] << 8) | b[st.p + 3]; n = 4; bits = 29; }
-  st.p += n;
-  const sign = val & 1;
-  const v = val >>> 1;
-  return sign ? v - (1 << (bits - 1)) : v;
-}
+// 압축 정수 디코딩은 sigtypes 로 합쳤다(2026-08-27). 여기에 blobUInt/blobInt 를 따로
+// 갖고 있었고, 아래 Document 이름 루프에는 세 번째 인라인 사본이 있었다.
+const blobUInt = (b, st) => sigtypes.uint(b, st);
+const blobInt = (b, st) => sigtypes.sint(b, st);
 
 // 숨은 시퀀스 포인트의 표식. 컴파일러가 "여기는 소스 위치가 없다" 고 적는 값이다.
 const HIDDEN_LINE = 0xFEEFEE;
@@ -151,15 +134,10 @@ function readPdbMethodDocuments(pdbPath) {
     if (!b.length) { docNames.set(r, ''); continue; }
     const sep = b[0] ? String.fromCharCode(b[0]) : '';
     const parts = [];
-    // 압축정수 인라인 디코딩 — readCompressed 는 파일 버퍼용이라 blob 조각에는 쓸 수 없다.
-    let p = 1;
-    while (p < b.length) {
-      const b0 = b[p];
-      let v, n;
-      if ((b0 & 0x80) === 0) { v = b0; n = 1; }
-      else if ((b0 & 0x40) === 0) { v = ((b0 & 0x3f) << 8) | b[p + 1]; n = 2; }
-      else { v = ((b0 & 0x1f) << 24) | (b[p + 1] << 16) | (b[p + 2] << 8) | b[p + 3]; n = 4; }
-      p += n;
+    // readCompressed 는 파일 버퍼용이라 blob 조각에 쓸 수 없다. sigtypes 의 blob 디코더를 쓴다.
+    const st = { p: 1 };
+    while (st.p < b.length) {
+      const v = blobUInt(b, st);
       parts.push(v ? md.getBlob(v).toString('utf8') : '');
     }
     docNames.set(r, parts.join(sep));
