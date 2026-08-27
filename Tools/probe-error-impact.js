@@ -99,7 +99,10 @@ check('신선도를 응답이 싣는다', () => {
 // 8. 경계 — 빈 입력에 그럴듯한 답을 만들면 안 된다.
 check('빈 errors 는 에러다 (0건 답이 아니다)', () => {
   const d = call({ errors: [] });
-  return { ok: !!d.error, detail: d.error ? d.error.slice(0, 70) : JSON.stringify(d).slice(0, 70) };
+  // `!!d.error` 만 보면 **어떤 에러든** 통과한다 - 도구가 아예 없을 때의
+  // "Unknown local tool" 로도 초록불이 켜졌다(§4-(27)). 그 에러여야 한다고 요구한다.
+  const right = !!d.error && /errors is required/.test(d.error) && /different states/.test(d.error);
+  return { ok: right, detail: d.error ? d.error.slice(0, 70) : JSON.stringify(d).slice(0, 70) };
 });
 
 // 9. 경계 — 상한. 오류 수백 건에 무한정 답하면 응답이 터진다.

@@ -40,7 +40,10 @@ console.log('\n오버로드 분리');
 // 1. 시그니처 키 그래프가 존재한다.
 check('시그니처 키 호출 그래프가 있다', () => {
   const m = cg.callersOfSig;
-  return { ok: m && m.size > 0, detail: m ? `키 ${m.size}개` : 'callersOfSig 없음' };
+  // "0보다 크다" 는 존재 확인에 그친다. 이름 그래프와 나란히 놓고 관계를 요구한다 —
+  // 시그니처 타깃은 이름 타깃보다 적을 수 없다(한 이름이 여러 시그니처로 갈리므로).
+  return { ok: m && m.size > 0 && m.size >= cg.callersOf.size,
+           detail: m ? `시그 타깃 ${m.size} >= 이름 타깃 ${cg.callersOf.size}` : 'callersOfSig 없음' };
 });
 
 // 2. 키 형태가 `Type::Method(인자)` 다.
@@ -118,7 +121,14 @@ check('이름 질의에 오버로드별 분해가 실린다', () => {
 // 9. 경계 — 없는 오버로드에 조용한 0 을 답하면 안 된다 (§4-(24)-1).
 check('없는 오버로드는 에러다 (0 이 아니다)', () => {
   const d = call('unity_find_callers', { method: 'BaseAttack::TryResolveHit(int,int,int,int,int)' });
-  return { ok: !!d.error || d.resolvedFrom, detail: d.error ? d.error.slice(0, 80) : `totalCount=${d.totalCount}` };
+  // `!!d.error` 만 보면 어떤 에러든 통과한다(§4-(27)). 이 자리에서 요구할 것은
+  // **"그 오버로드가 없다" 는 에러이고 실재하는 후보를 함께 준다**는 것이다.
+  const right = !!d.error && /No overload/.test(d.error) &&
+                Array.isArray(d.candidates) && d.candidates.length >= 2 &&
+                d.candidates.every(c => c.startsWith('BaseAttack::TryResolveHit('));
+  return { ok: right,
+           detail: d.error ? `${d.error.slice(0, 46)}... candidates ${d.candidates ? d.candidates.length : 0}`
+                           : `totalCount=${d.totalCount}` };
 });
 
 // 10. 경계 — 캐시 왕복에서 시그니처 그래프가 보존된다 (전례: §4-(24)-2).
