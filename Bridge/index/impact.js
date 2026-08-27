@@ -59,6 +59,15 @@ function resolveTarget(index, raw) {
     return { kind: 'method', type: ty, method: m, key: t, typeInfo: info || null };
   }
 
+  // ⚠️ 중첩 타입의 유일한 이름(`Outer/Inner`)은 **에셋 경로 판정보다 먼저** 봐야 한다.
+  // 아래 분기가 `/` 를 보면 무조건 에셋 경로로 취급하기 때문이다. 그래서 이 도구가
+  // "candidates 중 하나를 넣어라" 라고 답해 놓고 **그 후보를 넣으면 '인덱스에 없다'** 고
+  // 거절했다. 제시한 길이 막다른 길이면 거절만도 못하다. (2026-08-27 손검사로 잡음)
+  if (sym && sym.typeByQualifiedName && sym.typeByQualifiedName.has(t)) {
+    const ti = sym.typeByQualifiedName.get(t);
+    return { kind: 'type', type: ti.fullName, typeInfo: ti, resolvedByQualifiedName: t };
+  }
+
   // 32자 GUID 또는 경로처럼 보이면 에셋
   const isGuid = /^[0-9a-f]{32}$/i.test(t);
   if (isGuid || t.indexOf('/') >= 0) {
@@ -84,7 +93,16 @@ function resolveTarget(index, raw) {
       const winner = sym.typeByFullName.get(t);
       if (winner) asms.push(winner.assembly || '?');
       for (const d of (sym.duplicateTypes || [])) if (d.fullName === t) asms.push(d.assembly || '?');
-      return { kind: 'ambiguous', sameFullName: true, name: t, count: sameName.length, assemblies: asms.sort() };
+      // 거절만 하면 막다른 길이다. 대신 물을 **유일한 이름**을 같이 준다.
+      const qualified = [];
+      const w = sym.typeByFullName.get(t);
+      if (w) qualified.push(w.qualifiedName || w.fullName);
+      for (const d of (sym.duplicateTypes || [])) {
+        if (d.fullName === t) qualified.push(d.qualifiedName || d.fullName);
+      }
+      return { kind: 'ambiguous', sameFullName: true, name: t, count: sameName.length,
+               assemblies: asms.sort(), candidates: qualified.sort(),
+               hint: 'Pass one of candidates - nested types are unique under their Outer/Inner name.' };
     }
     if (sym.typeByFullName.has(t)) return { kind: 'type', type: t, typeInfo: sym.typeByFullName.get(t) };
     const uniq = [...new Set(short)];
@@ -207,14 +225,18 @@ function buildImpact(index, args) {
 
   if (target.kind === 'ambiguous') {
     if (target.sameFullName) {
+      // 거절하되 **막다르지 않게** 한다. 중첩 타입은 `Outer/Inner` 로 유일하므로 그 이름을 준다.
+      // 수치 정정(2026-08-27): 겹쳐 밀린 것은 레코드 123개이고 **고유 이름은 29개**다.
+      // 그중 19개가 컴파일러 생성이고, 사용자가 실제로 질의할 만한 것은
+      // PassData(3) · Segment(2) · Tab(2) · FactorySettings(2) · EffectState(2) 다섯이다.
       return {
         error: `${target.count} types in the user assemblies carry the full name '${target.name}' ` +
                `(assemblies: ${[...new Set(target.assemblies)].join(', ')}). The index keys types by ` +
-               `namespace.name and omits the declaring type of a nested type, so nested types with the ` +
-               `same name collide — measured on this project: 123 such types, all nested. An impact ` +
-               `answer would describe one of them without being able to say which. Ask about a method ` +
-               `('Type::Method'), or about the source file as an asset, instead.`,
+               `namespace.name, which drops the declaring type of a nested type, so nested types with ` +
+               `the same name collide. Pass one of candidates below - a nested type is unique under its ` +
+               `Outer/Inner name - or ask about a method ('Type::Method') or the source file as an asset.`,
         assemblies: [...new Set(target.assemblies)],
+        candidates: target.candidates || [],
       };
     }
     return {

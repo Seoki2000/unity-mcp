@@ -701,6 +701,23 @@ function status(index, meta) {
  * 타입 심볼 조회. 전체 이름 또는 짧은 이름을 받는다.
  * 짧은 이름이 여러 타입과 겹치면 후보를 돌려주고 하나를 고르지 않는다.
  */
+/**
+ * 같은 전체 이름을 공유하는 타입들의 **유일한** 이름 목록.
+ * 모호하다고 거절할 때 이걸 같이 줘야 호출자가 다음 수를 둘 수 있다.
+ */
+function qualifiedNamesFor(sym, fullName) {
+  const out = [];
+  const winner = sym.typeByFullName.get(fullName);
+  if (winner) out.push({ qualifiedName: winner.qualifiedName || winner.fullName,
+                         declaringType: winner.declaringType ?? null, assembly: winner.assembly });
+  for (const d of (sym.duplicateTypes || [])) {
+    if (d.fullName !== fullName) continue;
+    out.push({ qualifiedName: d.qualifiedName || d.fullName,
+               declaringType: d.declaringType ?? null, assembly: d.assembly });
+  }
+  return out.sort((a, b) => a.qualifiedName.localeCompare(b.qualifiedName));
+}
+
 function getTypeSymbols(index, args) {
   const sym = index.symbols;
   if (!sym) return { error: 'Symbol index not built. Run unity_index_rebuild.' };
@@ -708,7 +725,9 @@ function getTypeSymbols(index, args) {
   const q = String(args.type || '').trim();
   if (!q) return { error: 'type is required' };
 
-  let info = sym.typeByFullName.get(q);
+  // 중첩 타입의 유일한 이름(`Outer/Inner`)을 먼저 본다. 이걸로 물으면 모호성이 없다.
+  let info = (sym.typeByQualifiedName && sym.typeByQualifiedName.get(q)) || sym.typeByFullName.get(q);
+  const resolvedByQualified = !!(sym.typeByQualifiedName && sym.typeByQualifiedName.has(q));
   let candidates = null;
   let sameFullName = null;
 
@@ -722,7 +741,8 @@ function getTypeSymbols(index, args) {
   {
     const all = sym.typesByShortName.get(q) || [];
     const dupCount = all.filter(fn => fn === q).length;
-    if (dupCount > 1) sameFullName = dupCount;
+    // qualifiedName 으로 물었으면 모호하지 않다 - 정확히 하나를 지목한 것이다.
+    if (dupCount > 1 && !resolvedByQualified) sameFullName = dupCount;
   }
 
   if (!info) {
@@ -757,12 +777,16 @@ function getTypeSymbols(index, args) {
   return {
     ...(sameFullName ? {
       ambiguousFullName: sameFullName,
+      // 거절만 하면 막다른 길이다. **무엇을 대신 물으면 되는지** 같이 준다.
+      ambiguousCandidates: qualifiedNamesFor(sym, q),
       ambiguousFullNameNote:
         `${sameFullName} types in the user assemblies carry the full name '${q}'. This index keys ` +
-        'types by namespace.name and does not include the declaring type of a nested type, so ' +
-        'nested types with the same name collide. The members below are from one of them and the ' +
-        'others are not reachable by name here.',
+        'types by namespace.name, which drops the declaring type of a nested type, so nested types ' +
+        'with the same name collide. The members below are from ONE of them. Pass one of ' +
+        'ambiguousCandidates (Outer/Inner form) to address a specific one - those names are unique.',
     } : {}),
+    declaringType: info.declaringType ?? null,
+    qualifiedName: info.qualifiedName || info.fullName,
     fullName: info.fullName,
     name: info.name,
     namespace: info.namespace || null,
