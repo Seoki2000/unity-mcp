@@ -95,7 +95,7 @@ dev-0.0.2 절(§8), 독립 감사 절(§9), 레이어 D 절(§10), 라이브 교
 | 리포 | 워킹트리 깨끗, 브랜치 `optimized`. P3-a 작업분은 **`8f80fce` 부터 이 파일의 마지막 커밋까지** — 정확한 HEAD 는 `git log --oneline` 으로 볼 것. 여기에 HEAD 해시를 적으면 그 커밋 자신 때문에 항상 낡는다(P2 때 같은 정정을 한 번 했다) |
 | **Unity** | **켜져 있었다.** 세션 끝에 그대로 두었으니 꺼져 있으면 다시 켤 것 |
 | 인덱스 캐시 | 버전 11, 참조 엣지 **6,305**, `duplicateTypes` 123 보존. **이제 매 호출 신선도 검증됨** |
-| `tools/list` | **85개 / 43,392 B** — P3-b 가 +1,250 B(약 338 ±101 토큰/세션). 그 전까지는 전부 도구 0개 추가였다 |
+| `tools/list` | **85개 / 43,368 B** — P3-b 가 **+1,226 B**(정규화 후 실측. 정의 원본은 1,250 B, 약 331 ±99 토큰/세션). 그 전까지는 전부 도구 0개 추가였다 |
 | 프로브 | `probe-error-impact` **14/14** · `probe-overloads` **10/10** · `probe-field-types` **8/8** · `probe-error-impact` **11/11** · `probe-nested-types` **8/8** · `probe-method-lines` **7/7** · `probe-verify-loop` **7/7** · `probe-impact-analysis` **10/10** · `probe-project-map` 통과 |
 
 기동 명령과 준비 확인은 이 절 아래 "Unity 를 켤 때 알아 둘 것" 에 있다.

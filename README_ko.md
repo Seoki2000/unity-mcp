@@ -8,7 +8,7 @@
 
 AI 에이전트가 Unity 에디터를 **조회하고 제어**할 수 있게 해주는 Unity용 **MCP(Model Context Protocol)** 서버입니다. 이 버전은 로컬 최적화 버전으로, Behavior Tree(행동 트리), 창(Window) 관리, 고급 GameObject/계층(Hierarchy) 조작 기능이 추가로 확장되었습니다.
 
-## 포크 개발 버전 — dev-0.0.5
+## 포크 개발 버전 — dev-0.0.6
 
 이 포크(`Seoki2000/unity-mcp`, 브랜치 `optimized`)의 개발 기록. 업스트림과, 게임
 프로젝트가 이전에 핀으로 쓰던 `2ea969e` 와 **무엇이 어떻게 다른지 실측값으로** 적는다.
@@ -21,7 +21,7 @@ AI 에이전트가 Unity 에디터를 **조회하고 제어**할 수 있게 해�
 - **보안** — 경로 탈출 차단(`McpPathGuard`), 세션 토큰 인증(`McpAuthToken`). 둘 다 신규 파일
 - **컨텍스트 위생** — 툴 annotations, 페이지네이션(`McpPaging`), 검색 랭킹, 응답 상한
 - **아웃프로세스 프로젝트 인덱스** — 참조 역방향 조회, 어셈블리 심볼 + PDB 소스 매핑,
-  IL 호출 그래프, 직렬화 컴포넌트 값. 브릿지 쪽 툴 9개
+  IL 호출 그래프, 직렬화 컴포넌트 값, 진단×인덱스 조인. 브릿지 쪽 툴 12개
   (`unity_find_*`, `unity_get_type_symbols`, `unity_get_asset_components`, `unity_index_*`)
 - **Behavior 저작 툴 6개** — 게임 레포 `Assets/` 에 흩어져 있던 것을 패키지로 회수
 - **브릿지 런처** — `PackageCache` 해시 폴더를 실행 시점에 탐색
@@ -47,7 +47,8 @@ annotations 선언: **0 → 52건** (ReadOnly 26 / Destructive 10 / Idempotent 1
 | dev-0.0.2 | 39,669 | 82 | 483.8 |
 | dev-0.0.3 | 39,669 | 82 | 483.8 (도구 추가 없음) |
 | dev-0.0.4 | 40,905 | 83 | 492.8 (`unity_project_map` +1,236 B) |
-| **dev-0.0.5** | **42,142** | **84** | **501.7** (`unity_impact_analysis` +1,237 B) |
+| dev-0.0.5 | 42,142 | 84 | 501.7 (`unity_impact_analysis` +1,237 B) |
+| **dev-0.0.6** | **43,368** | **85** | **510.2** (`unity_explain_compile_errors` 정규화 후 +1,226 B) |
 
 이전 핀 대비 **+48.5%**. 3.5~4 B/토큰으로 환산하면 세션당 **+3,000~3,500 토큰**이다.
 도구를 14개 늘렸고, annotations 를 새로 달았고, 공통 도구 4개의 설명이 +345자 늘어난 결과다.

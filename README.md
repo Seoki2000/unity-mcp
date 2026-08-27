@@ -7,19 +7,19 @@
 *Read this in other languages: [한국어](README_ko.md)*
 A **Model Context Protocol (MCP)** server for Unity that enables AI agents to **query and control** the Unity Editor. This local-optimized version is enhanced with additional tools for Behavior Trees, Window Management, and advanced GameObject/Hierarchy manipulation.
 
-## Fork dev build — dev-0.0.5
+## Fork dev build — dev-0.0.6
 
 This fork (`Seoki2000/unity-mcp`, branch `optimized`) diverges from upstream. Numbers below
 are measured against a live Unity editor, not estimated. Full record in Korean:
 [README_ko.md](README_ko.md#포크-개발-버전--dev-001).
 
-Package version: `2.3.0-dev.0.0.5` · baseline commit: `5331a34`
+Package version: `2.3.0-dev.0.0.6` · baseline commit: `5331a34`
 
 **Added since the previously pinned `2ea969e`:** path-escape guard and session-token auth;
 tool annotations, pagination and response caps; an out-of-process project index (reverse
 reference lookup, assembly symbols with PDB source mapping, IL call graph, serialized
-component values — 9 bridge-side tools); 6 Behavior authoring tools reclaimed from the game
-repo; a bridge launcher that resolves `PackageCache` at run time. Tools: **67 → 82**, none removed.
+component values, diagnostics-to-index join — 12 bridge-side tools); 6 Behavior authoring tools reclaimed from the game
+repo; a bridge launcher that resolves `PackageCache` at run time. Tools: **67 → 85**, none removed.
 
 **`tools/list` fixed cost went up, not down.**
 
@@ -30,9 +30,10 @@ repo; a bridge launcher that resolves `PackageCache` at run time. Tools: **67 �
 | dev-0.0.1 now | 37,067 | 81 | 457.6 |
 | dev-0.0.2 | 39,669 | 82 | 483.8 |
 | dev-0.0.4 | 40,905 | 83 | 492.8 |
-| **dev-0.0.5** | **42,142** | **84** | **501.7** |
+| dev-0.0.5 | 42,142 | 84 | 501.7 |
+| **dev-0.0.6** | **43,368** | **85** | **510.2** |
 
-That is **+48.5%** over the old pin — roughly +3,000 tokens per session. dev-0.0.1 claws
+That is **+73.7%** over the old pin — roughly +3,000 tokens per session. dev-0.0.1 claws
 back 3,309 B of it losslessly by omitting annotation hints that equal the MCP spec defaults.
 Note `destructiveHint` defaults to **true**, so omitting a `false` would flip a safe tool
 into a destructive one; only `false` is emitted and `true` is dropped, and the bridge's own
