@@ -1,5 +1,14 @@
 const fs=require('fs'), path=require('path');
 const ROOT=process.argv[2];
+if(!ROOT){
+  console.error('사용법: node missing-scripts.js <프로젝트 경로>');
+  console.error('예:     node missing-scripts.js C:/Unity/MainProject');
+  console.error('인자를 빼면 예전에는 path.join 안에서 의미불명한 TypeError 로 죽었다.');
+  process.exit(2);
+}
+// ⚠️ 확장자 화이트리스트다. 출하 인덱스는 2026-08-24 에 이 방식을 버리고 **내용 스니핑**
+// (앞 512바이트에 NUL 이 없으면 텍스트로 본다)으로 갔다. 그래서 두 수치가 다르고,
+// 그 차이가 곧 이 목록의 한계다 — prototype/README.md 의 대조 표를 볼 것.
 const YE=new Set(['.prefab','.unity','.asset','.mat','.controller','.anim']);
 
 function timed(label, fn){ const t=Date.now(); const r=fn(); console.log(`  ${label.padEnd(42)} ${String(Date.now()-t).padStart(6)} ms`); return r; }
