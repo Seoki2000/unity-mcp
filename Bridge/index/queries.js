@@ -574,6 +574,25 @@ function methodAttributesFor(index, typeName, methodName) {
   return out;
 }
 
+/**
+ * `Type::Method` 키가 덮는 선언 목록. 오버로드는 한 키로 합쳐지므로(시그니처 미디코딩)
+ * **몇 개를 합쳤는지와 어디인지**를 응답이 말해야 한다. 위치는 PDB SequencePoints 에서 온다.
+ */
+function declarationsFor(index, typeName, methodName) {
+  const sym = index.symbols;
+  if (!sym || !sym.typeByFullName) return [];
+  const info = sym.typeByFullName.get(typeName);
+  if (!info || !Array.isArray(info.methods)) return [];
+  return info.methods
+    .filter(m => m.name === methodName)
+    .map(m => ({
+      line: m.line ?? null,
+      endLine: m.endLine ?? null,
+      isPublic: m.isPublic, isStatic: m.isStatic, isVirtual: m.isVirtual, isAbstract: m.isAbstract,
+    }))
+    .sort((a, b) => (a.line ?? 0) - (b.line ?? 0));
+}
+
 function findCallers(index, args) {
   const r = resolveMethodKey(index, args.method);
   if (r.error) return r;
@@ -586,6 +605,9 @@ function findCallers(index, args) {
   const typeName = r.key.slice(0, r.key.indexOf('::'));
   const wirings = inspectorWiringsFor(index, r.key, methodName);
   const attributes = methodAttributesFor(index, typeName, methodName);
+  // 이 키가 실제로 선언 몇 개를 덮는가. 지금까지 오버로드 경고는 **정적 상투구**여서
+  // 선언이 하나뿐인 메서드에도 똑같이 붙었고, 그래서 진짜 병합을 희석시켰다.
+  const declarations = declarationsFor(index, typeName, methodName);
 
   return {
     method: r.key,
@@ -620,7 +642,14 @@ function findCallers(index, args) {
         'calls [Test], and Netcode generates the call for [ServerRpc]/[ClientRpc]. Read the list before ' +
         'concluding anything from a caller count of zero.',
     } : {}),
-    note: 'Overloads share one key (Type::Method), so callers of all overloads are merged. ' +
+    // 선언이 둘 이상일 때만 싣는다. 하나뿐이면 모호성이 없다.
+    ...(declarations.length > 1 ? { declarations } : {}),
+    note: (declarations.length > 1
+            ? `This key merges ${declarations.length} declarations (` +
+              declarations.map(d => d.line === null ? 'line unknown' : `line ${d.line}`).join(', ') +
+              '), so the callers below are the union across all of them - see declarations. ' +
+              'Overloads share one key (Type::Method) because method signatures are not decoded yet. '
+            : '') +
           'Only calls from project (user assembly) code are indexed.' +
           (page.total === 0 && !wirings.length && !attributes.length && index.inspectorWiring
             ? ' No code callers, no Inspector wiring and no attributes were found — but a method can still ' +
@@ -749,6 +778,10 @@ function getTypeSymbols(index, args) {
     fields: info.fields.slice(0, maxMembers),
     methods: info.methods.slice(0, maxMembers).map(m => ({
       name: m.name, isPublic: m.isPublic, isStatic: m.isStatic, isVirtual: m.isVirtual, isAbstract: m.isAbstract,
+      // PDB SequencePoints 에서 나온 소스 위치. 첫 시퀀스 포인트라 시그니처 줄이 아니라
+      // 본문 시작에 가깝다. 없으면 null 이다(추상·인터페이스·컴파일러 생성).
+      // 이게 있어야 같은 이름의 오버로드 둘이 응답에서 구별된다.
+      line: m.line ?? null, endLine: m.endLine ?? null,
     })),
     truncatedMembers: info.fields.length > maxMembers || info.methods.length > maxMembers,
     attachedTo,
@@ -757,7 +790,11 @@ function getTypeSymbols(index, args) {
       return byName.length ? { referencedByTypeName: byName } : {};
     })(),
     note: 'Field/method names come from the compiled assembly; source file mapping comes from the Portable PDB. ' +
-          'Field type signatures are not decoded yet (Phase 2b-2).',
+          'Field type signatures are not decoded yet (Phase 2b-2). ' +
+          'method.line/endLine come from PDB sequence points and span the method BODY, not its signature: ' +
+          'the first sequence point sits just past the opening brace, so the declaration and any attributes ' +
+          'are a line or two ABOVE line. Do not treat the span as a containment test for a compiler error ' +
+          'location. null means the method has no sequence points (abstract, interface, or compiler-generated).',
   };
 }
 
