@@ -15,6 +15,7 @@
 const fs = require('fs');
 const path = require('path');
 const clr = require('./clrmeta');
+const sigtypes = require('./sigtypes');
 
 // TypeDef.Flags
 const TYPE_VISIBILITY_MASK = 0x7;
@@ -274,8 +275,15 @@ function readAssembly(root, dllPath) {
     const fields = [];
     for (let f = fieldRange.start; f <= fieldRange.end && f >= 1; f++) {
       const ff = md.readCol(0x04, f, 0);
+      // Field 테이블 2번 컬럼이 FieldSig blob 이다. 지금까지 아무도 읽지 않았고,
+      // 그래서 필드에 **타입이 없었다.** 실패하면 null 로 남긴다 - 추측해서 채우면
+      // 값 검증이 거짓말을 한다.
+      const fsig = sigtypes.decodeFieldSig(
+        md.getBlob(md.readCol(0x04, f, 2)),
+        (coded) => resolveTypeDefOrRef(md, coded));
       fields.push({
         name: md.getString(md.readCol(0x04, f, 1)),
+        type: fsig,
         isPublic: (ff & FIELD_ACCESS_MASK) === FIELD_PUBLIC,
         isStatic: !!(ff & FIELD_STATIC),
         notSerialized: !!(ff & FIELD_NOT_SERIALIZED),

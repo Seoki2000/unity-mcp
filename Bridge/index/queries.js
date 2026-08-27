@@ -799,7 +799,12 @@ function getTypeSymbols(index, args) {
     sourceFiles: info.sourceFiles,
     fieldCount: info.fields.length,
     methodCount: info.methods.length,
-    fields: info.fields.slice(0, maxMembers),
+    // 필드 타입은 FieldSig 에서 디코딩한 것이다. null 은 "모른다" 다(함수 포인터,
+    // 런타임 내부 표현, 손상된 서명). 추측하지 않는다.
+    fields: info.fields.slice(0, maxMembers).map(f => ({
+      name: f.name, type: f.type ?? null,
+      isPublic: f.isPublic, isStatic: f.isStatic, notSerialized: f.notSerialized,
+    })),
     methods: info.methods.slice(0, maxMembers).map(m => ({
       name: m.name, isPublic: m.isPublic, isStatic: m.isStatic, isVirtual: m.isVirtual, isAbstract: m.isAbstract,
       // PDB SequencePoints 에서 나온 소스 위치. 첫 시퀀스 포인트라 시그니처 줄이 아니라
