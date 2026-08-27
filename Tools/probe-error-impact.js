@@ -113,5 +113,24 @@ check('컴파일러가 내는 절대 경로를 정규화한다', () => {
            detail: `resolution=${e && e.resolution}, type=${e && e.type && e.type.fullName}` };
 });
 
+// 11. 경계 — ⭐ 붙은 에셋 수가 실제와 맞는가.
+//     처음 구현은 `index.scriptUsers` 를 읽었는데 그런 맵은 없다(이름은 `scriptRefs`).
+//     그래서 붙은 에셋이 몇 개든 **조용히 0 을 답했다.** 4번이 type/callerCount 만
+//     검사해서 통과시켰다 — 축을 하나 더 실었으면 그 축도 검사해야 한다(§4-(21)).
+check('붙은 에셋 수가 인덱스와 일치한다 (왕복)', () => {
+  // 붙은 에셋이 실제로 있는 .cs 를 인덱스에서 찾는다(표본을 추측하지 않는다).
+  let picked = null;
+  for (const [guid, users] of (idx.scriptRefs || new Map())) {
+    const p = idx.guidToPath.get(guid);
+    if (!p || !p.endsWith('.cs')) continue;
+    if (!idx.symbols.typesBySourceFile.get(p)) continue;
+    if (users.size > 0) { picked = { path: p, expect: users.size }; break; }
+  }
+  if (!picked) return { ok: false, detail: '붙은 에셋이 있는 .cs 를 못 찾았다' };
+  const e = call({ errors: [{ file: picked.path, line: 1, message: 'x' }] }).errors[0];
+  return { ok: e.attachedAssetCount === picked.expect,
+           detail: `${picked.path.split('/').pop()}: 응답 ${e.attachedAssetCount} vs 인덱스 ${picked.expect}` };
+});
+
 console.log(`\n${pass}/${pass + fail}`);
 process.exit(fail === 0 ? 0 : 1);

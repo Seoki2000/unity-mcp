@@ -176,11 +176,18 @@ function explain(index, args, meta) {
       row.callers = [];
     }
 
+    // ⚠️ 여기 처음 구현은 `index.scriptUsers` 를 읽었다. 그런 맵은 없다 — 이름은
+    // `scriptRefs` 다. 그래서 붙은 에셋이 몇 개든 **조용히 0 을 답하고 있었다.**
+    // 프로브 4번이 type 과 callerCount 만 검사해서 통과시켰다(§4-(21)).
     const guid = index.pathToGuid.get(file);
     if (guid) {
-      const users = index.scriptUsers && index.scriptUsers.get(guid);
+      const users = index.scriptRefs && index.scriptRefs.get(guid);
       row.attachedAssetCount = users ? users.size : 0;
       row.attachedAssets = users ? [...users].sort().slice(0, 5) : [];
+    } else {
+      // GUID 를 못 찾았다는 것은 "붙은 에셋이 없다" 가 아니라 "이 파일을 모른다" 다.
+      row.attachedAssetCount = null;
+      row.attachedNote = 'No .meta GUID for this path, so attachment could not be looked up at all.';
     }
 
     out.push(row);
