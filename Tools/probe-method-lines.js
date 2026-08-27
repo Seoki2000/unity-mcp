@@ -82,15 +82,19 @@ check('줄번호가 디스크의 소스와 맞다 (표본 20)', () => {
 
 // 4. 없는 것은 null 이다. 0 으로 채우면 1번 줄을 가리키는 거짓말이 된다.
 check('시퀀스 포인트 없는 메서드는 line 이 null (0 이 아니다)', () => {
-  let nulls = 0, zeros = 0, total = 0;
+  let nulls = 0, zeros = 0, total = 0, withLine = 0;
   for (const t of ['Unit', 'GameManager']) {
     for (const m of methodsOf(t).methods) {
       total++;
       if (m.line === null) nulls++;
+      else if (typeof m.line === 'number') withLine++;
       if (m.line === 0) zeros++;
     }
   }
-  return { ok: zeros === 0, detail: `total=${total}, null=${nulls}, zero=${zeros}` };
+  // 처음엔 `zeros === 0` 만 봤다 — 그러면 **모든 메서드에 line 이 없어도 통과한다**
+  // (감사 지적). 실제로 line 이 붙은 것이 있을 것도 함께 요구한다.
+  return { ok: zeros === 0 && withLine > 0 && nulls > 0,
+           detail: `total=${total}, line 있음=${withLine}, null=${nulls}, zero=${zeros}` };
 });
 
 // 5. 오버로드 경고가 구체적이어야 한다.

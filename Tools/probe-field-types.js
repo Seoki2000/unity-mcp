@@ -89,9 +89,14 @@ check('배열과 제네릭이 표현된다', () => {
 // 5. 모르는 것은 null 이다. 추측해서 채우면 값 검증이 거짓말을 한다.
 check('디코딩 실패는 null 이지 추측이 아니다', () => {
   const all = allFields();
+  // 처음엔 placeholder 3종만 거부했다 — 그러면 **모든 type 이 undefined 여도 통과한다**
+  // (감사 지적). 값이 실재할 것과, 없을 때는 정확히 null 일 것을 함께 요구한다.
   const bad = all.filter(x => x.f.type === '' || x.f.type === '?' || x.f.type === 'unknown');
+  const undef = all.filter(x => x.f.type === undefined).length;
   const nulls = all.filter(x => x.f.type === null).length;
-  return { ok: bad.length === 0, detail: `placeholder ${bad.length}개, null ${nulls}/${all.length}` };
+  const typed = all.filter(x => typeof x.f.type === 'string' && x.f.type).length;
+  return { ok: bad.length === 0 && undef === 0 && typed > 0,
+           detail: `placeholder ${bad.length}, undefined ${undef}, null ${nulls}, 실제 타입 ${typed}/${all.length}` };
 });
 
 // 6. 전수 디코딩률. 낮으면 도구가 "모른다" 를 너무 많이 말하게 된다.
@@ -114,8 +119,11 @@ check('캐시 왕복에서 필드 타입이 보존된다 (경계)', () => {
 });
 
 // 8. ⭐ 디스크 대조. 디코딩한 타입 이름이 실제 소스의 선언과 맞는가.
+//    ⚠️ **표본 검사다.** 전수가 아니다 — 소스 파일이 매핑되지 않은 타입의 필드 1,052개는
+//    대조 자체가 불가능하고, 여기 쓰는 정규식도 짧은 이름 휴리스틱이다.
+//    "모든 선언이 일치한다" 의 근거로 쓰면 안 된다(감사 지적).
 //    표본을 손으로 고르지 않는다(§4-(27)) — 인덱스에서 소스가 있는 필드를 순회한다.
-check('디코딩한 타입이 디스크의 선언과 맞다 (표본 150)', () => {
+check('디코딩한 타입이 디스크의 선언과 맞다 (표본 150, 전수 아님)', () => {
   const seen = [];
   const misses = [];
   for (const [, info] of sym.typeByFullName) {

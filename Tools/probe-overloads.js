@@ -56,12 +56,19 @@ check('시그니처 키가 Type::Method(인자) 형태다', () => {
            detail: `${shaped.length}/${keys.length} 형태 일치, 예: ${keys[0]}` };
 });
 
-// 3. ⭐ 오버로드가 실제로 갈린다. BaseAttack::TryResolveHit 는 선언 4개다.
-check('TryResolveHit 4개 오버로드가 각각 키를 갖는다', () => {
+// 3. ⭐ 오버로드가 실제로 갈린다.
+//    이름이 "4개 오버로드가 각각 키를 갖는다" 였는데 단언은 `>= 2` 였다 — 실측 3개로 통과했다
+//    (감사 지적). **호출자가 없는 오버로드는 그래프에 키가 없는 것이 정상**이므로 4개를
+//    요구하면 안 된다. 대신 선언 수를 심볼에서 독립적으로 세어 **키 수 + 호출자 없는 수**가
+//    선언 수와 맞는지 본다 — 그게 실제로 검사할 수 있는 관계다.
+check('TryResolveHit 의 선언 수와 시그니처 키 수가 화해된다', () => {
   const keys = [...(cg.callersOfSig || new Map()).keys()]
     .filter(k => k.startsWith('BaseAttack::TryResolveHit('));
-  return { ok: keys.length >= 2,
-           detail: `${keys.length}개: ${keys.map(k => k.slice(k.lastIndexOf('('))).join(' ')}` };
+  const info = idx.symbols.typeByFullName.get('BaseAttack');
+  const decls = (info ? info.methods : []).filter(m => m.name === 'TryResolveHit').length;
+  return { ok: keys.length >= 2 && decls >= keys.length,
+           detail: `선언 ${decls}개, 그래프 키 ${keys.length}개(호출자 없는 ${decls - keys.length}개는 키가 없다): ` +
+                   keys.map(k => k.slice(k.lastIndexOf('('))).join(' ') };
 });
 
 // 4. 시그니처 키의 호출자 합이 이름 키의 호출자와 어긋나지 않는다.
@@ -89,8 +96,12 @@ check('오버로드를 해석 못 한 엣지 수를 보고한다', () => {
            detail: `sigEdges=${st.sigEdges}, sigUnresolved=${st.sigUnresolvedEdges}, 이름엣지=${st.edges}` };
 });
 
-// 6. ⭐⭐ 회귀 — 기존 이름 키가 하나도 안 바뀌어야 한다. 이 설계의 전제다.
-check('기존 이름 키가 그대로다 (회귀)', () => {
+// 6. ⭐⭐ 회귀 — 기존 이름 키가 안 바뀌어야 한다. 이 설계의 전제다.
+//    ⚠️ 이 검사는 **바이트 동일까지 증명하지 않는다.** 고정 호출자 수 둘과 참조 엣지 수를
+//    본다. 진짜 바이트 대조는 독립 감사가 했다(2026-08-27): 오버로드 추가 전(`d4c853d^`)의
+//    빌더와 현재 빌더를 같은 심볼로 돌려 `callsFrom` 545,403 B / `callersOf` 611,698 B 가
+//    양쪽 바이트 동일. 그 절차는 이 프로브에 없으므로 이름에 '표본' 임을 밝힌다.
+check('기존 이름 키가 그대로다 (표본 회귀)', () => {
   const a = call('unity_find_callers', { method: 'BaseAttack::TryResolveHit' });
   const b = call('unity_find_callers', { method: 'Unit::TakeDamage' });
   const st = call('unity_index_status', {});
