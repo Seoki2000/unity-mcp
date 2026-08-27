@@ -2,26 +2,62 @@
 // Unity API 를 전혀 쓰지 않는다 — .meta / YAML 텍스트만 읽는다.
 const fs = require('fs'), path = require('path');
 const ROOT = process.argv[2];
+if (!ROOT) {
+  console.error('사용법: node index-prototype.js <프로젝트 경로>');
+  console.error('예:     node index-prototype.js C:/Unity/MainProject');
+  console.error('       node index-prototype.js C:/Unity/MainProject --all   (PackageCache 포함)');
+  process.exit(2);
+}
 const ASSETS = path.join(ROOT, 'Assets');
 
 const YAML_EXT = new Set(['.prefab', '.unity', '.asset', '.mat', '.controller', '.anim']);
 const t0 = Date.now();
 
 // ── 1) 전체 파일 목록 (한 번의 재귀)
+//
+// ⚠️ 2026-08-27 수정. 여기 두 줄이 조용히 깨져 있었다:
+//   1) `(function walkAll(){...})` 에 **호출 괄호가 없어** 실행되지 않았다
+//   2) 그 아래 `walkDir(r)` 는 **정의된 적 없는 함수**인데 `try{}catch{}` 가
+//      ReferenceError 를 삼켰다
+// 결과: Packages 와 Library/PackageCache 를 한 번도 훑지 않고 Assets 만 봤다.
+// 그래서 이 스크립트가 내던 수치가 출하 인덱스와 크게 달랐다 —
+// meta 2,037 / YAML 783 / 엣지 4,355 (출하: 3,142 / 1,171 / 6,305).
+// README 의 2026-08-23 표는 **이 버그가 있는 채로 측정된 값**이다.
+// 독립 감사(Codex CLI)가 지적하고 재현했다.
 const metas = [], yamls = [];
-const walkRoots = [ASSETS, path.join(ROOT,'Packages'), path.join(ROOT,'Library','PackageCache')];
-(function walkAll(){ for (const r of walkRoots) walk(r); })
-;(function walk(dir) {
+// 스코프를 고를 수 있게 한다. 출하 인덱스는 기본이 `includePackageCache: false` 이므로
+// **기본값을 그것과 맞춰야** 두 수치를 나란히 놓고 비교할 수 있다(교차검증의 전제).
+// `--all` 을 주면 PackageCache 까지 훑는다 — 원래 이 스크립트의 용도였던 전수 타이밍 측정이다.
+const INCLUDE_PACKAGE_CACHE = process.argv.includes('--all');
+const walkRoots = INCLUDE_PACKAGE_CACHE
+  ? [ASSETS, path.join(ROOT, 'Packages'), path.join(ROOT, 'Library', 'PackageCache')]
+  : [ASSETS, path.join(ROOT, 'Packages')];
+console.log(`── 스코프: ${INCLUDE_PACKAGE_CACHE ? 'Assets + Packages + Library/PackageCache (--all)'
+  : 'Assets + Packages (출하 기본값과 동일)'}`);
+
+// ⚠️ **정션을 따라가야 한다.** `Assets/50.Art` 는 SVN 리포(`C:/svn/.../Art`)로 가는
+// Windows Junction 이고, `Dirent.isDirectory()` 는 정션에 대해 **false** 를 낸다
+// (`isSymbolicLink()` 가 true 다). 그래서 이 스크립트는 아트 라이브러리를 통째로
+// 건너뛰고 있었다 — 실측 `.meta` 1,105개(전체 3,142개 중 35%)가 빠졌다.
+// 2026-08-27 에 출하 인덱스와 수치가 안 맞아서 발견했다. `find -type f` 도 같은 이유로
+// 정션을 안 따라가므로 대조군으로 쓸 때 주의할 것.
+function isDirEntry(dirent, fullPath) {
+  if (dirent.isDirectory()) return true;
+  if (!dirent.isSymbolicLink()) return false;
+  try { return fs.statSync(fullPath).isDirectory(); } catch { return false; }
+}
+
+function walk(dir) {
   let ents;
   try { ents = fs.readdirSync(dir, { withFileTypes: true }); } catch { return; }
   for (const e of ents) {
     const p = path.join(dir, e.name);
-    if (e.isDirectory()) { walk(p); continue; }
+    if (isDirEntry(e, p)) { walk(p); continue; }
     if (e.name.endsWith('.meta')) metas.push(p);
     else if (YAML_EXT.has(path.extname(e.name))) yamls.push(p);
   }
-})(ASSETS);
-for (const r of walkRoots.slice(1)) { try { walkDir(r); } catch {} }
+}
+for (const r of walkRoots) walk(r);
 const tWalk = Date.now();
 
 // ── 2) .meta → GUID ↔ 경로 양방향

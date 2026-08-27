@@ -652,7 +652,21 @@ function callLocalTool(name, args, port) {
         error: _buildError || undefined,
       });
     }
-    return ok({ ...queries.status(idx, _meta), cacheAvailable: true, freshness: _freshness() });
+    // callGraph.perAssembly 는 지금까지 **쓰기 전용**이었다 — 어셈블리 하나가 디코딩에
+    // 실패하면 `perAssembly.push({assembly, error})` 에만 남고 어느 응답에도 안 실렸다.
+    // 즉 실패한 어셈블리가 통째로 보이지 않았다. 지우는 대신 문제 있는 항목만 싣는다.
+    const pa = (idx.callGraph && idx.callGraph.perAssembly) || [];
+    const troubled = pa.filter(a => a && (a.error || a.failed > 0));
+    return ok({
+      ...queries.status(idx, _meta), cacheAvailable: true, freshness: _freshness(),
+      ...(troubled.length ? {
+        assembliesWithDecodeProblems: troubled,
+        assembliesNote: 'These user assemblies failed to open or had methods the IL decoder could ' +
+          'not read. Call graph edges from them are missing, so a caller count of zero for a type ' +
+          'in one of these is unproven. Empty/omitted means every user assembly decoded cleanly. ' +
+          'Note this is in-memory only: a cache-loaded index cannot report it (perAssembly is not persisted).',
+      } : {}),
+    });
   }
 
   if (name === 'unity_explain_compile_errors') {

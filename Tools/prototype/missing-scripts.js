@@ -13,13 +13,25 @@ const YE=new Set(['.prefab','.unity','.asset','.mat','.controller','.anim']);
 
 function timed(label, fn){ const t=Date.now(); const r=fn(); console.log(`  ${label.padEnd(42)} ${String(Date.now()-t).padStart(6)} ms`); return r; }
 
+// ⚠️ **정션을 따라가야 한다.** `Assets/50.Art` 는 SVN 리포(`C:/svn/.../Art`)로 가는
+// Windows Junction 이고, `Dirent.isDirectory()` 는 정션에 대해 **false** 를 낸다
+// (`isSymbolicLink()` 가 true 다). 그래서 이 스크립트는 아트 라이브러리를 통째로
+// 건너뛰고 있었다 — 실측 `.meta` 1,105개(전체 3,142개 중 35%)가 빠졌다.
+// 2026-08-27 에 출하 인덱스와 수치가 안 맞아서 발견했다. `find -type f` 도 같은 이유로
+// 정션을 안 따라가므로 대조군으로 쓸 때 주의할 것.
+function isDirEntry(dirent, fullPath) {
+  if (dirent.isDirectory()) return true;
+  if (!dirent.isSymbolicLink()) return false;
+  try { return fs.statSync(fullPath).isDirectory(); } catch { return false; }
+}
+
 const GRE=/^guid:\s*([0-9a-f]{32})\s*$/m;
 function metaGuids(roots){
   const set=new Set();
   for(const root of roots){
     (function w(d){ let e; try{e=fs.readdirSync(d,{withFileTypes:true})}catch{return}
       for(const x of e){ const p=path.join(d,x.name);
-        if(x.isDirectory()) w(p);
+        if(isDirEntry(x,p)) w(p);
         else if(x.name.endsWith('.meta')){ let h; try{h=fs.readFileSync(p,'latin1').slice(0,400)}catch{continue}
           const m=GRE.exec(h); if(m) set.add(m[1]); } } })(path.join(ROOT,root));
   }
@@ -39,7 +51,7 @@ const usage=new Map(), ident=new Map();
 timed('Assets YAML 파싱 (m_Script + 식별자)', ()=>{
   (function w(d){ let e; try{e=fs.readdirSync(d,{withFileTypes:true})}catch{return}
     for(const x of e){ const p=path.join(d,x.name);
-      if(x.isDirectory()) w(p);
+      if(isDirEntry(x,p)) w(p);
       else if(YE.has(path.extname(x.name))){ let t; try{t=fs.readFileSync(p,'latin1')}catch{continue}
         const rel=path.relative(ROOT,p).split(path.sep).join('/');
         let m; BLOCK.lastIndex=0;
