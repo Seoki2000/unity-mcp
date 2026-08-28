@@ -34,7 +34,7 @@ try {
   process.exit(3);
 }
 
-const EXPECT_PASS = 10;
+const EXPECT_PASS = 11;
 
 const has = (arr, re) => Array.isArray(arr) && arr.some(x => re.test(typeof x === 'string' ? x : JSON.stringify(x)));
 const count = arr => (Array.isArray(arr) ? arr.length : 0);
@@ -55,6 +55,15 @@ const PROBES = [
 
   ['type: Hurtbox 는 에셋 16개에 붙는다', { target: 'Hurtbox' }, r =>
     (r.assets && (count(r.assets.attachedTo) + (r.assets.attachedToOmitted || 0))) === 16],
+
+  // ⭐ PDB 문서가 없는 타입(메서드가 없어 시퀀스 포인트가 안 잡히는 데이터 컴포넌트)도
+  //    붙은 에셋을 답해야 한다. 예전에는 `sourceFiles[0]` 하나에 기대서 **축이 통째로
+  //    빠진 채 impactedCount 0** 이 나왔다 — 삭제 판단에 쓰이는 거짓 0 이다(§4-(21) 형태).
+  //    실측 2026-08-28: 사용자 타입 1,052 중 문서 없음 307, 그중 실제로 붙은 것 4개.
+  ['type: PDB 문서 없는 타입도 붙은 에셋을 답한다 (파일명 폴백)', { target: 'TwentyThreeBasicAttackFigure' }, r =>
+    (r.assets && (count(r.assets.attachedTo) + (r.assets.attachedToOmitted || 0))) === 3 &&
+    r.assets.scriptAssetBasis === 'filename-match' &&
+    r.summary.byAxis.attachedAssets === 3],
 
   ['type: Unit 의 파생 타입 직계 5 / 전이 8', { target: 'Unit' }, r =>
     r.inheritance &&

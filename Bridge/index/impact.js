@@ -148,6 +148,34 @@ function baseChainOf(sym, typeName) {
   return chain;
 }
 
+/**
+ * 이 타입의 스크립트 에셋(.cs) 경로를 찾는다. 경로 두 개다.
+ *
+ * 1. **PDB 문서** — 타입의 메서드가 어느 파일에서 왔는지. 정확하지만 **없을 수 있다**:
+ *    메서드가 없거나 시퀀스 포인트가 없는 타입(필드만 있는 데이터 컴포넌트, 초기화자
+ *    없는 클래스)은 문서가 아예 안 잡힌다.
+ * 2. **파일명 규칙** — Unity 는 MonoBehaviour 의 파일명과 타입명이 같기를 요구한다.
+ *    1번이 비었을 때만 쓰고, 후보가 **유일할 때만** 쓴다(둘 이상이면 고르지 않는다).
+ *
+ * 왜 필요한가(2026-08-28 실측): 사용자 타입 1,052개 중 **307개가 PDB 문서가 없다.**
+ * 그중 실제로 에셋에 붙어 있는 것이 4개(참조 6건)였고, 그 타입에 영향 분석을 물으면
+ * `attachedAssets` 축이 **통째로 빠진 채 impactedCount 0** 이 나왔다 — 삭제·이름변경
+ * 판단에 쓰이는 도구에서 §4-(21) 과 같은 거짓 0 이다.
+ */
+function scriptAssetOfType(index, sym, typeName, info) {
+  const fromPdb = info && info.sourceFiles && info.sourceFiles[0];
+  if (fromPdb) return { path: fromPdb, basis: 'pdb-document' };
+  const short = String(typeName || '').split('.').pop();
+  if (!short) return { path: null, basis: 'none' };
+  const hits = [];
+  for (const [, p] of index.guidToPath) {
+    if (!/\.cs$/i.test(p)) continue;
+    if (p.slice(p.lastIndexOf('/') + 1) === short + '.cs') hits.push(p);
+  }
+  if (hits.length !== 1) return { path: null, basis: hits.length ? 'ambiguous-filename' : 'none' };
+  return { path: hits[0], basis: 'filename-match' };
+}
+
 /** 이 타입의 소스 파일에서 정의된 메서드 키들. */
 function methodKeysOfType(sym, typeName) {
   const info = sym.typeByFullName.get(typeName);
@@ -335,11 +363,13 @@ function buildImpact(index, args) {
 
   // ---- 에셋 축 -----------------------------------------------------------
   const assetsBlock = { };
+  // (아래에서 쓴다 — 타입의 스크립트 에셋을 찾는 두 경로)
   if (target.kind === 'type' || target.kind === 'method') {
     // 이 타입의 스크립트 GUID로 붙어 있는 에셋
     const ty = target.type || target.kind;
     const info = sym.typeByFullName.get(ty);
-    const src = info && info.sourceFiles && info.sourceFiles[0];
+    const resolved = scriptAssetOfType(index, sym, ty, info);
+    const src = resolved.path;
     const guid = src ? index.pathToGuid.get(src) : null;
     const users = guid ? index.scriptRefs.get(guid) : null;
     if (users && users.size) {
@@ -348,7 +378,10 @@ function buildImpact(index, args) {
       assetsBlock.attachedToOmitted = c.omitted;
       axis('attachedAssets', users.size);
     }
-    if (src) assetsBlock.scriptAsset = src;
+    if (src) {
+      assetsBlock.scriptAsset = src;
+      assetsBlock.scriptAssetBasis = resolved.basis;   // pdb-document 인가 filename-match 인가
+    }
   }
 
   if (target.kind === 'asset' && target.guid) {
@@ -387,6 +420,26 @@ function buildImpact(index, args) {
     }
     axis('referencingAssets', assetSrc.length);
     if (weak.size) axis('textualMatches', weak.size);
+
+    // 이미 옮겨졌거나 지워진 뒤라면 위의 `pathLoads` 는 **비어 있다** — 경로가 안 풀리므로
+    // 엣지 자체가 없다. 그때 유일하게 남는 단서가 "가리키는 것이 없는 로드 경로" 목록이고,
+    // 파일 이름이 같은 것만 골라 준다. 실측(2026-08-28): 에셋 하나를 옮기니 컴파일러와
+    // 콘솔은 침묵하고 이 목록만 1 늘었다.
+    const base = target.path ? target.path.slice(target.path.lastIndexOf('/') + 1) : null;
+    if (base) {
+      const near = (index.danglingLoads || []).filter(d => {
+        const b = String(d.path || '');
+        return b.slice(b.lastIndexOf('/') + 1) === base;
+      });
+      if (near.length) {
+        assetsBlock.danglingLoadPaths = near.slice(0, maxPerAxis);
+        assetsBlock.danglingLoadPathsNote =
+          'Load calls that point at a path with this file name where nothing lives now. ' +
+          'This is what a move or a delete leaves behind: the compiler and the console stay ' +
+          'silent, and the resolved pathLoads edge above is gone because the path no longer resolves.';
+        axis('danglingLoadPaths', near.length);
+      }
+    }
     if (settings.length) axis('projectSettings', settings.length);
 
     // 이 에셋이 스크립트면, 붙어 있는 곳도 같이 낸다.
@@ -562,7 +615,18 @@ function buildImpact(index, args) {
            'unchanged: Unity still resolves the component (get_prefab_info reported the new class), so ' +
            'attachedTo survives a rename (survives holds) - but this index degrades typeResolution from ' +
            'filename-match to unity-derived, which is the signal that the names no longer agree. ' +
-           'Not covered by that test: a file holding several MonoBehaviours, moveOrReimport, and delete.',
+           'The three cases that test left open were run on 2026-08-28, also live. moveOrReimport: ' +
+           'the .meta follows, so the GUID and every GUID-keyed axis survive, the compiler and the ' +
+           'console stay silent, and the only trace of the broken const path is that it stops ' +
+           'resolving - see danglingLoadPaths, which names the loader (breaksSilently holds for ' +
+           'code.pathLoads). delete: the compiler catches it only while some caller still names the ' +
+           'type (CS0246); once the code compiles, get_prefab_info silently drops the component with ' +
+           'no console entry, and this index is what reports the orphaned m_Script GUID ' +
+           '(find_missing_scripts). A file holding several MonoBehaviours: Unity binds the component ' +
+           'to the FIRST MonoBehaviour declared in the file when no class matches the file name - ' +
+           'renaming or even reordering the classes silently rebinds it to a different class and the ' +
+           'serialized field values do not follow, while this index answers "no compiled type maps to ' +
+           'this file".',
   };
 
   out.summary.impactedCount = impacted;

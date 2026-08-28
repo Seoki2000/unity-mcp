@@ -112,5 +112,20 @@ check('신규 빌드 뒤에 재빌드 루프에 빠지지 않는다 (경계)', (
            detail: `revalidations ${a.revalidations} -> ${b.revalidations}, reuse ${i1 === i2}` };
 });
 
+// 8. ⭐ 가리키는 것이 없는 로드 경로를 **이름까지** 답해야 한다.
+//    실측(2026-08-28, 라이브 Unity): 에셋 하나를 옮기니 컴파일러도 콘솔도 침묵하고
+//    `pathLoadUnresolved` 만 2 -> 3 이 됐다. 개수만 있으면 어느 파일이 깨졌는지 알 수 없다.
+//    이 프로젝트에는 실제로 2건 있다(`EffectSystemSetup.cs` 가 없어진 VFX 프리팹 둘을 부른다).
+check('깨진 로드 경로를 개수가 아니라 목록으로 낸다', () => {
+  const d = JSON.parse(tools.callLocalTool('unity_index_status', {}, PORT).content[0].text);
+  const unresolved = (d.stats && d.stats.pathLoadUnresolved) || 0;
+  const list = d.danglingLoads || [];
+  if (!unresolved) return { ok: false, detail: 'pathLoadUnresolved 가 0 이다 — 표본이 없다' };
+  const shaped = list.every(x => x && typeof x.file === 'string' && typeof x.path === 'string' && x.kind);
+  const counted = list.length + (d.danglingLoadsOmitted || 0);
+  return { ok: shaped && counted === unresolved && !!d.danglingLoadsNote,
+           detail: `unresolved ${unresolved} / 목록 ${list.length}(+생략 ${d.danglingLoadsOmitted || 0}) / 형태 ${shaped}` };
+});
+
 console.log(`\n${pass}/${pass + fail}`);
 process.exit(fail === 0 ? 0 : 1);

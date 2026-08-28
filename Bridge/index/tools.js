@@ -154,7 +154,9 @@ function cachePath(root) {
 //     주 문서를 갖는다(부분 클래스 누출 22건).
 // 15: 여러 문서에 걸친 메서드의 두 번째 범위(`extraSpans`, 실측 5개 — 부분 클래스의
 //     생성자). 구 캐시에는 없어 그 파일의 그 줄이 다음 메서드로 귀속된다.
-const CACHE_VERSION = 15;
+// 16: 가리키는 것이 없는 로드 경로 목록(`danglingLoads`). 예전엔 개수만 세서 어느 파일이
+//     깨졌는지 알 수 없었다 — 에셋을 옮기면 컴파일러·콘솔이 침묵하고 그 수만 1 늘었다.
+const CACHE_VERSION = 16;
 
 function saveCache(index) {
   try {
@@ -167,6 +169,8 @@ function saveCache(index) {
       fingerprint: index.fingerprint || null,
       guidCoverage: index.guidCoverage,
       stats: index.stats,
+      danglingLoads: index.danglingLoads || [],
+      danglingLoadsOmitted: index.danglingLoadsOmitted || 0,
       guidToPath: [...index.guidToPath],
       refs: [...index.refs].map(([g, s]) => [g, [...s]]),
       scriptRefs: [...index.scriptRefs].map(([g, s]) => [g, [...s]]),
@@ -329,6 +333,10 @@ function loadCache(root) {
       weakRefs: new Map((raw.weakRefs || []).map(([g, a]) => [g, new Set(a)])),
       symbols: sym,
       stats: raw.stats,
+      // 캐시로 뜬 세션에서도 같은 답을 해야 한다 — 이걸 안 복원하면 "깨진 로드 경로"
+      // 질문이 캐시 세션에서만 조용히 빈 답을 낸다(§4-(24)-2 와 같은 형태).
+      danglingLoads: raw.danglingLoads || [],
+      danglingLoadsOmitted: raw.danglingLoadsOmitted || 0,
       // 지문을 복원해 둔다. 안 하면 캐시에서 올린 인덱스에는 fingerprint 가 없고,
       // 그 상태로 다시 저장될 때(예: PackageCache 병합 후) fingerprint: null 이 기록된다.
       // 다음 세션은 "지문 없는 구 캐시" 로 보고 매번 전체 재빌드를 한다 —
@@ -664,8 +672,20 @@ function callLocalTool(name, args, port) {
     // 즉 실패한 어셈블리가 통째로 보이지 않았다. 지우는 대신 문제 있는 항목만 싣는다.
     const pa = (idx.callGraph && idx.callGraph.perAssembly) || [];
     const troubled = pa.filter(a => a && (a.error || a.failed > 0));
+    // 가리키는 것이 없는 로드 경로를 **이름까지** 싣는다. 개수만 있으면
+    // "어딘가 하나 깨졌다" 가 되고 어느 파일인지 알 수 없다. 실측(2026-08-28):
+    // 이 프로젝트에 2건 있고 둘 다 `EffectSystemSetup.cs` 가 없어진 VFX 프리팹을 부른다.
+    const dangling = idx.danglingLoads || [];
     return ok({
       ...queries.status(idx, _meta), cacheAvailable: true, freshness: _freshness(),
+      ...(dangling.length ? {
+        danglingLoads: dangling.slice(0, 50),
+        danglingLoadsOmitted: (idx.danglingLoadsOmitted || 0) + Math.max(0, dangling.length - 50),
+        danglingLoadsNote: 'Load calls whose path folded to a string but no asset lives there. ' +
+          'The compiler cannot see this and Unity logs nothing: the call just returns null at run time. ' +
+          'A moved or deleted asset lands here (measured: moving one asset raised this count by 1 ' +
+          'while the compiler and the console stayed silent).',
+      } : {}),
       ...(troubled.length ? {
         assembliesWithDecodeProblems: troubled,
         assembliesNote: 'These user assemblies failed to open or had methods the IL decoder could ' +

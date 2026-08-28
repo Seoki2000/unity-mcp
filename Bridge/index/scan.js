@@ -190,6 +190,11 @@ function scanOtherFiles(root, files, meta, refs, weak, resourcesMap) {
   const t0 = Date.now();
   let sniffed = 0, textFiles = 0, binaryFiles = 0, largeFiles = 0, bytes = 0, edges = 0;
   let pathLoadEdges = 0, pathLoadResolved = 0, pathLoadUnresolved = 0, dynamicLoads = 0;
+  // 풀렸지만 **가리키는 것이 없는** 로드 경로. 세기만 하면 "어딘가 하나 깨졌다" 가 되고
+  // 어느 파일인지 알 수 없다. 2026-08-28 실측: 에셋을 옮기면 컴파일러·콘솔 둘 다 침묵하고
+  // 이 수가 1 늘어난다 — 그게 유일한 신호였다. 그래서 (파일, 경로) 를 남긴다.
+  const dangling = [];
+  const DANGLING_CAP = 200;
   const buf = Buffer.allocUnsafe(SNIFF_BYTES);
 
   for (const f of files) {
@@ -269,13 +274,21 @@ function scanOtherFiles(root, files, meta, refs, weak, resourcesMap) {
         } else {
           hit = addEdge(value);
         }
-        if (hit) pathLoadResolved++; else pathLoadUnresolved++;
+        if (hit) pathLoadResolved++;
+        else {
+          pathLoadUnresolved++;
+          if (dangling.length < DANGLING_CAP) {
+            dangling.push({ file: assetPath, path: value,
+                            kind: isResourcesCall.test(mm[0]) ? 'resources-key' : 'asset-path' });
+          }
+        }
       }
     }
   }
 
   return { sniffed, textFiles, binaryFiles, largeFiles, bytes, edges,
            pathLoadEdges, pathLoadResolved, pathLoadUnresolved, dynamicLoads,
+           danglingLoads: dangling, danglingLoadsOmitted: Math.max(0, pathLoadUnresolved - dangling.length),
            ms: Date.now() - t0 };
 }
 
@@ -608,6 +621,9 @@ function buildIndex(root, opts = {}) {
     guidCoverage: opts.includePackageCache ? 'full' : 'assets',
     // 질의가 0 을 답할 때 "안 본 확장자였나" 를 판단할 근거.
     yamlExtensions: [...YAML_EXT].sort(),
+    // 가리키는 것이 없는 로드 경로 (파일, 경로). 세기만 하면 어느 파일인지 알 수 없다.
+    danglingLoads: other.danglingLoads || [],
+    danglingLoadsOmitted: other.danglingLoadsOmitted || 0,
     // 캐시 유효성 검사용. 여기서 계산해 두면 저장 시 다시 훑지 않는다.
     fingerprint: fingerprintFrom(metaFiles.metas, assetFiles.yamls, assetFiles.others),
     guidToPath: meta.guidToPath,
