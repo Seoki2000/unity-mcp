@@ -130,9 +130,13 @@ function readSequencePoints(md, row, docRow) {
     // 이 메서드의 파일이 아닌 포인트는 범위에 넣지 않는다(부분 클래스·생성 코드).
     if (curDoc !== initDoc) continue;
     if (minL === null || line < minL) minL = line;
-    if (maxL === null || line > maxL) maxL = line;
+    // `endLine` 은 **마지막 포인트의 끝 줄**이다. 시작 줄의 최댓값으로 두면 여러 줄에
+    // 걸친 마지막 문장이 범위 밖으로 떨어진다 — 독립 검증(2026-08-28)이 그런 메서드
+    // 133개를 짚었다(차이 중앙 2 / 최대 22줄). ΔLines 가 그 문장의 높이다.
+    const endOfPoint = line + dLines;
+    if (maxL === null || endOfPoint > maxL) maxL = endOfPoint;
   }
-  return minL === null ? null : { line: minL, endLine: maxL };
+  return minL === null ? null : { line: minL, endLine: maxL, doc: initDoc };
 }
 
 function readPdbMethodDocuments(pdbPath) {
@@ -165,6 +169,10 @@ function readPdbMethodDocuments(pdbPath) {
     try {
       const span = readSequencePoints(md, r, docRow);
       if (span) methodSpan.set(r, span);
+      // Document 컬럼이 0 인 메서드(= 여러 문서에 걸친 것)도 **주 문서를 안다** —
+      // blob 의 InitialDocument 다. 이걸 안 쓰면 그 메서드가 부분 클래스의 모든 파일
+      // 뷰에 다 나온다(독립 검증이 짚은 22건: `.ctor`/`.cctor` 5개 × 파일 수).
+      if (!docRow && span && span.doc) methodDoc.set(r, docNames.get(span.doc) || '');
     } catch { /* 이 메서드는 위치를 모른다 - null 로 남는다 */ }
   }
   methodDoc.spans = methodSpan;

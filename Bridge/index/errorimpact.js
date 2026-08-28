@@ -61,6 +61,11 @@ function methodSpansForFile(index, file) {
     const info = sym.typeByFullName.get(fn);
     if (!info) continue;
     const files = info.sourceFiles || [];
+    // 전체 이름이 겹쳐 **한 레코드만 남은** 타입은 다른 파일의 것일 수 있다
+    // (컴파일러 생성 클로저 `<>c`·`<>c__DisplayClassN` 이 파일마다 생기고 이름이 같다.
+    //  자기 코드에도 있다 — `PassData` 가 두 파일에 있다). 그 레코드의 메서드를 이 파일의
+    //  범위로 쓰면 다른 파일의 람다 범위가 이 파일의 줄을 삼킨다. 실측 15건이었다.
+    if (files.length && !files.includes(file)) continue;
     for (const m of (info.methods || [])) {
       if (typeof m.line !== 'number') continue;
       // 부분 클래스 — 이 메서드가 다른 파일에 있으면 이 파일의 범위가 아니다.
@@ -146,6 +151,7 @@ function attributeLine(spans, line, srcLines) {
  * 즉 **4분의 1 이상이 메서드와 아무 관계가 없는 파일 수준 줄**인데 "바로 다음 메서드" 로
  * 붙고 있었다(`using` 한 줄의 CS0246 이 `.ctor` 로 귀속됐다).
  *
+ *   in-method-body    본문 안이다(`containment: exact`). 분류하지 않는다 — 귀속이 이미 확실하다
  *   file-level        using / namespace / 전처리기 — 메서드 귀속을 아예 하지 않는다
  *   type-attribute    속성 줄이고 아래가 타입 선언이다 — 타입이 깨진다
  *   member-attribute  속성 줄이고 아래가 멤버다
@@ -267,7 +273,15 @@ function explain(index, args, meta) {
 
     // 그 줄이 실제로 무엇인지 먼저 말한다. `gap` 만으로는 "다음 메서드로 붙인 힌트" 라는
     // 말밖에 못 했고, gap 의 4분의 1 이상은 메서드와 무관한 파일 수준 줄이었다.
-    const cls = classifyLine(srcLines, row.line, typeNames, sym);
+    //
+    // ⚠️ **본문 안(exact)의 줄은 분류하지 않는다.** 처음엔 모든 줄에 돌렸는데, 본문 안의
+    // `damage += 1;` 같은 문장이 필드 이름을 담고 있어 `field-declaration` 으로 나갔다.
+    // 독립 검증(2026-08-28)이 그 정밀도를 18.8%(14,643 예측 중 2,754)로 측정했고,
+    // 그 오차의 거의 전부가 본문 줄이었다(12,534건). 본문 줄은 귀속이 이미 확실하므로
+    // 분류가 답을 더하지 못한다 — `in-method-body` 라고만 말한다.
+    const cls = (hit && hit.containment === 'exact')
+      ? { kind: 'in-method-body' }
+      : classifyLine(srcLines, row.line, typeNames, sym);
     row.lineKind = cls.kind;
     if (cls.member) row.member = cls.member;
     else if (cls.candidates) row.memberCandidates = cls.candidates;

@@ -16,6 +16,9 @@ const path = require('path');
 const fs = require('fs');
 const ROOT = path.join(__dirname, '..');
 const tools = require(path.join(ROOT, 'Bridge/index/tools'));
+// 파일별 메서드 범위를 만드는 자리를 직접 검사한다(프로브 20). 도구 응답만으로는
+// "다른 파일의 메서드가 이 파일 뷰에 섞였다" 를 전수로 볼 수 없다.
+const ei = require(path.join(ROOT, 'Bridge/index/errorimpact'));
 
 const PORT = 3000;
 let pass = 0, fail = 0;
@@ -262,8 +265,8 @@ check('exact 아닌 줄의 절반 이상이 unknown 이 아니다 (모집단 검
 check('lineKind 가 허용된 값이고 member 를 지어내지 않는다 (경계)', () => {
   const src = fs.readFileSync(path.join(ROOTDIR, BA), 'utf8').split(String.fromCharCode(10));
   const rows = src.map((_, i) => ({ file: BA, line: i + 1, message: 'x' })).slice(0, 50);
-  const allowed = new Set(['file-level', 'type-attribute', 'member-attribute', 'type-declaration',
-                           'field-declaration', 'blank-or-comment', 'unknown']);
+  const allowed = new Set(['in-method-body', 'file-level', 'type-attribute', 'member-attribute',
+                           'type-declaration', 'field-declaration', 'blank-or-comment', 'unknown']);
   const fieldNames = new Set();
   for (const fn of (idx.symbols.typesBySourceFile.get(BA) || [])) {
     const info = idx.symbols.typeByFullName.get(fn);
@@ -279,6 +282,51 @@ check('lineKind 가 허용된 값이고 member 를 지어내지 않는다 (경�
   return { ok: bad.length === 0 && fabricated === 0 && kinds.size >= 2,
            detail: `관측 ${[...kinds].join(', ')}` + (bad.length ? ` / 허용 밖 ${bad.join(',')}` : '') +
                    ` / 지어낸 member ${fabricated}` };
+});
+
+// 20. ⭐ 전수 — 같은 메서드가 **두 파일 뷰에 동시에** 나오면 한쪽은 남의 파일 것이다.
+//     독립 검증(2026-08-28)이 두 경로를 짚었다: ① Document 컬럼이 0 인 `.ctor` 5개가
+//     부분 클래스의 모든 파일 뷰에 나왔다(22 span) ② 전체 이름이 겹쳐 한 레코드만 남은
+//     타입(`<>c`·`<>c__DisplayClassN`, 자기 코드의 `PassData`)의 람다 범위가 남의 파일로
+//     새어 15건. 둘 다 응답이 "이 줄은 저 메서드다" 라고 **확신 있게 틀리는** 자리다.
+check('같은 메서드가 두 파일 뷰에 동시에 나오지 않는다 (전수)', () => {
+  const seen = new Map();
+  for (const file of idx.symbols.typesBySourceFile.keys()) {
+    for (const s of ei.methodSpansForFile(idx, file)) {
+      const k = `${s.typeFullName}::${s.name}@${s.line}`;
+      if (!seen.has(k)) seen.set(k, new Set());
+      seen.get(k).add(file);
+    }
+  }
+  const multi = [...seen].filter(([, f]) => f.size > 1);
+  return { ok: seen.size > 1000 && multi.length === 0,
+           detail: `범위 ${seen.size}개 중 다중 파일뷰 ${multi.length}` +
+                   (multi.length ? ` — 예: ${multi.slice(0, 2).map(([k, f]) => `${k} (${f.size}개 파일)`).join(' / ')}` : '') };
+});
+
+// 21. ⭐ 본문 안의 줄은 분류하지 않는다. 처음엔 전부 분류해서 본문의 `damage += 1;` 이
+//     `field-declaration` 으로 나갔다 — 독립 검증이 정밀도 18.8% 로 측정했고 오차의
+//     거의 전부가 본문 줄이었다(12,534건).
+check('본문 안의 줄에 field-declaration 을 붙이지 않는다 (모집단)', () => {
+  const rows = [];
+  const files = [...idx.symbols.typesBySourceFile.keys()].filter(f => f.startsWith('Assets/')).slice(0, 25);
+  for (const f of files) {
+    let src; try { src = fs.readFileSync(path.join(ROOTDIR, f), 'utf8').split(String.fromCharCode(10)); } catch { continue; }
+    for (let i = 1; i <= src.length; i++) rows.push({ file: f, line: i, message: 'x' });
+  }
+  let body = 0, bad = 0; const samples = [];
+  for (let k = 0; k < rows.length; k += 50) {
+    for (const e of (call({ errors: rows.slice(k, k + 50) }).errors || [])) {
+      if (!e.method || e.method.containment !== 'exact') continue;
+      body++;
+      if (e.lineKind !== 'in-method-body' || e.member) {
+        bad++;
+        if (samples.length < 3) samples.push(`${e.file.split('/').pop()}:${e.line} ${e.lineKind}${e.member ? ' +member' : ''}`);
+      }
+    }
+  }
+  return { ok: body > 200 && bad === 0,
+           detail: `본문 줄 ${body} 중 다른 kind ${bad}` + (samples.length ? ` — ${samples.join(' / ')}` : '') };
 });
 
 // 표본 고르기 — 인덱스에서 시작해 소스로 내려간다(§4-(27): 추측으로 고르면 보장이 없다).
