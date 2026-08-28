@@ -30,8 +30,18 @@ function check(name, fn) {
   ok ? pass++ : fail++;
 }
 
-const idx = tools.ensureIndex(PORT, false, false, true);
-if (!idx) { console.error('인덱스 캐시가 없다. 먼저 질의를 한 번 돌려 캐시를 만들 것.'); process.exit(2); }
+// 인수 스위트는 스스로 선다 — 캐시가 없으면 여기서 죽지 말고 한 번 빌드한다.
+// (2026-08-28 인수 때 프로브 8개 중 6개가 이 줄에서 exit 2 했다. §4-(33))
+let idx = tools.ensureIndex(PORT, false, false, true);
+if (!idx) {
+  const t0 = Date.now();
+  idx = tools.ensureIndex(PORT, false, false, false);
+  if (idx) console.log(`  note  인덱스 캐시가 없어 콜드 빌드했다 (${Date.now() - t0} ms)`);
+}
+if (!idx) {
+  console.error('인덱스를 만들 수 없다 — 프로젝트 루트 해석 실패일 수 있다. unity_index_status 를 먼저 볼 것.');
+  process.exit(2);
+}
 const sym = idx.symbols;
 
 function fieldsOf(type) {
