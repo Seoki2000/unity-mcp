@@ -102,6 +102,10 @@ P3-b 는 결국 만들었는데 **형태를 바꿨다** — 감사가 최대 위
 그 층 위에 이미 도구를 두 개 얹은 뒤였다는 것이 이 세션의 요점이다 — 교훈은 §4-(33)~(37).
 그 밖에: `lineKind` 로 gap 의 86.0% 를 설명(파일 수준 줄은 이제 메서드에 붙지 않는다) ·
 개수 필드 이름 정정(`assetGuidPairCount`) · 패키지 어셈블리 심볼 항목 실측(파견).
+**그리고 Unity 를 켜서 `effectByOperation` 의 남은 세 연산을 전부 실검증했다**(E4~E6):
+셋 다 주장대로였고, 그 과정에서 (a) 이동·삭제 뒤에는 도구조차 깨진 상수 경로를 말하지
+못한다는 것을 보고 `danglingLoads` 를 넣었고(이 프로젝트에 실제 2건 있다),
+(b) PDB 문서가 없는 타입의 에셋 축이 **거짓 0** 이던 것을 고쳤다(§4-(39)).
 
 **측정 보고서: `C:/dev/unity-mcp-measurement-report-dev-0.0.1.md`** (토큰·정확도 실측, 근거 커밋 목록).
 dev-0.0.2 절(§8), 독립 감사 절(§9), 레이어 D 절(§10), 라이브 교차검증 절(§11),
@@ -132,11 +136,11 @@ P3-b 줄 귀속 정밀화 · `effectByOperation` 실검증 · Missing Script 전
 | 항목 | 상태 |
 |---|---|
 | 리포 | 워킹트리 깨끗, 브랜치 `optimized`. **원격에는 아직 안 올렸다 — push 는 사용자 확인 후.** 정확한 HEAD 는 `git log --oneline` 으로 볼 것 — 여기 해시를 적으면 그 커밋 자신 때문에 항상 낡는다 |
-| **Unity** | **꺼져 있다.** 이 세션의 작업은 전부 Unity 없이 했다(JS 만 고쳤다). 켜는 방법은 아래 "Unity 를 켤 때" |
+| **Unity** | **켜 둔 채로 끝냈다**(PID 는 `Get-Process Unity` 로 확인). 세션 후반의 `effectByOperation` 실검증(E4~E6)에 필요해서 켰다 — 넘겨받는 사람이 안 쓸 거면 꺼도 된다. 켜는 방법은 아래 "Unity 를 켤 때" |
 | `tools/list` | **85개 / 43,368 B / 도구당 510.2** — 배열 기준. 응답 줄은 43,412 B, 디스크 캐시는 43,415 B. **이 세션은 도구 정의를 건드리지 않았다**(응답 필드만 늘었다) |
-| 인덱스 캐시 | **버전 15**(12 에서 세 번 올림 — 구 캐시는 틀린 줄 범위·짧은 `endLine`·빠진 두 번째 문서 범위를 담는다), **4,473,021 B**(+8,485 B: `fileIndex` 588개 + `extraSpans` 5개). 참조 엣지 6,305 · 호출 엣지 8,673 · 시그니처 엣지 8,848 · `guidToPath` 3,142 |
+| 인덱스 캐시 | **버전 16**(12 에서 네 번 올림 — 구 캐시는 틀린 줄 범위·짧은 `endLine`·빠진 두 번째 문서 범위·`danglingLoads` 부재를 담는다), **약 4.47 MB**(`fileIndex` 588 + `extraSpans` 5 + `danglingLoads` 2). 참조 엣지 6,305 · 호출 엣지 8,673 · 시그니처 엣지 8,848 · `guidToPath` 3,142 |
 | 콜드 빌드 | **5.69~6.90 s** (Unity **꺼짐**, 2026-08-28 실측 5회). ⚠️ 전 세션 기록 4.67~4.71 s 는 Unity 유휴 상태에서 잰 값이다 — 조건이 다르므로 회귀로 읽지 말 것. 웜 질의 13~22 ms |
-| 검사 | 프로브 8개 스위트(7 · 11 · 8 · 10 · 8 · **24** · 10 · 7) + 전수 스윕 1개, 전부 통과. 명령은 아래 "돌려볼 것" |
+| 검사 | 프로브 8개 스위트(**8** · 11 · 8 · 10 · 8 · **24** · **11** · 7) + 전수 스윕 1개, 전부 통과. 명령은 아래 "돌려볼 것" |
 
 ### ▶️ 넘겨받고 30초 안에 돌려볼 것
 
@@ -202,7 +206,11 @@ node Tools/sweep-field-checks.js | tail -5     # §6 전수 집계 (약 32 s, Un
 | 무변경 재컴파일 | Editor.log `2182 evaluated, **1 updated**` — 사용자 어셈블리 0개 컴파일. `observedAssemblyCount: 0` 이 그것이다 |
 | `diagnosticsState` 4상태 | `unobserved` / `collecting` / `complete`+observed 0 / `complete`+observed N **전부 라이브 관측** |
 | `SessionState` | 도메인 리로드를 넘는다 (generation 1→2→3 유지) |
-| 이 프로젝트의 CS 경고 | Editor.log 전체에 `warning CS` **0건** |
+| 이 프로젝트의 CS 경고 | ~~0건~~ → **3건이다**(2026-08-28 정정). 예전 기록은 **컴파일이 일어나지 않은 상태**의 Editor.log 를 본 것이다. 실제로 재컴파일하면 `warningCount: 3` 이고 `BossTeleportManager.cs(287,16) CS0618` · `ZoneBridgeGateManager.cs(261,16) CS0618` · `BossBomb.cs(152,10) CS0114` 다. **콜드 빌드 수치와 같은 종류의 착오** — 조건을 안 적으면 다른 것을 잰다 |
+| 에셋을 옮기면 | GUID 는 `.meta` 와 함께 유지되고 **GUID 기반 축은 전부 살아남는다.** 컴파일러·콘솔 **침묵**. 상수 경로만 깨지는데, 흔적은 `pathLoadUnresolved` +1 뿐이었다 — 그래서 `danglingLoads`(파일+경로)를 남기게 했다. E4 |
+| 에셋(스크립트)을 지우면 | 컴파일러는 **아직 그 타입을 부르는 코드가 있을 때만** 잡는다(CS0246). 코드가 통과하면 `get_prefab_info` 가 그 컴포넌트를 **조용히 목록에서 뺀다**(Missing Script 표시도, 콘솔도 없다). 남는 신호는 직렬화 데이터의 고아 GUID 이고 `find_missing_scripts` 가 잡는다. E5 |
+| 파일에 MonoBehaviour 가 여럿이면 | 파일명과 같은 클래스가 없을 때 Unity 는 **파일에서 처음 선언된 MonoBehaviour** 에 묶는다. **순서만 바꿔도** 컴포넌트가 다른 클래스로 조용히 재바인딩되고 직렬화된 필드 값은 따라가지 않는다. E6·E6b |
+| 깨진 로드 경로 | 실제로 **2건 있다** — `Assets/1.Scripts/Effects/Editor/EffectSystemSetup.cs` 가 `Assets/5.VFX/Common/FX_Hit_Spark.prefab` 과 `…/FX_Hit_Blunt Variant.prefab` 을 부르는데 그 폴더가 없다. `unity_index_status` 의 `danglingLoads` 로 나온다 |
 | 컴파일러가 내는 경로 | **역슬래시 + 프로젝트 상대**(`Assets\_X\Y.cs`). 절대 경로도 온다 |
 | `effectByOperation` | **실검증됨.** 세 주장 모두 참 — CS1061 이 호출자를 짚는다 / 배선은 컴파일러·콘솔·Editor.log 전부 침묵 / **클래스만 바꿔도 부착은 살아남는다**(내 예상이 틀렸다). 하네스: `Tools/verify-effect-by-operation.md` |
 | `GetAllAssetPaths()` 의 24,233 | Assets **3,143** + Packages **21,075**. 패키지 에셋은 `Packages/<id>/...` 로 나오지 `Library/PackageCache/...` 가 아니다 |
@@ -227,12 +235,12 @@ node Tools/sweep-field-checks.js | tail -5     # §6 전수 집계 (약 32 s, Un
 
 | 파일 | 무엇을 검사하나 |
 |---|---|
-| `Tools/probe-verify-loop.js` | 인덱스 신선도·콘솔 절단 (7) |
+| `Tools/probe-verify-loop.js` | 인덱스 신선도·콘솔 절단 (8 — 8번이 깨진 로드 경로를 목록으로 내는지) |
 | `Tools/probe-method-lines.js` | 메서드 위치·오버로드 가시성 (11 — 8~11 이 **전수 불변식**: 음수 없음 / 겹침 없음 / 전수 디스크 대조 / 디코딩 버그 재현) |
 | `Tools/probe-field-types.js` | 필드 타입 서명 (8) |
 | `Tools/probe-nested-types.js` | 중첩 타입 신원 (8) |
 | `Tools/probe-overloads.js` | 오버로드 분리 (10) |
-| `Tools/probe-impact-analysis.js` | 영향 분석 (10) |
+| `Tools/probe-impact-analysis.js` | 영향 분석 (11 — 11번이 PDB 문서 없는 타입의 파일명 폴백) |
 | `Tools/probe-error-impact.js` | P3-b 진단×인덱스 조인 (24 — 15~19 가 `lineKind`, **20~21 이 전수 불변식**(파일 뷰 누출 금지 / 본문 줄에 분류 금지), 22~24 가 독립 검증이 짚은 재현: 생성자 범위의 필드 초기화자 / 시그니처 줄 오판 / 두 번째 문서 범위) |
 | `Tools/probe-project-map.js` | 지도 (7, **예산에 따라 답이 달라진다** — 2k 1/7 · 4k 5/7 · 6k 6/7 · 8k~10k 7/7) |
 | `Tools/sweep-field-checks.js` | §6 전수 집계 재측정(측정 시임 `queries._checkFields`) |
@@ -253,9 +261,10 @@ node Tools/sweep-field-checks.js | tail -5     # §6 전수 집계 (약 32 s, Un
    A(자기 코드 3개/132참조)는 의도된 삭제였는지 사람이 알아야 하고, B(서드파티 11개/32참조)는
    재임포트로 되돌아올 수 있다. 정리한다면 `DefaultVolumeProfile.asset` 의 죽은 Volume 4개가 가장 안전하다.
    **게임 레포를 건드리는 유일한 항목이다 — 사용자 확인 없이 하지 말 것**
-3. **`effectByOperation` 의 남은 연산** — `moveOrReimport`·`delete`, 그리고 파일 하나에
-   MonoBehaviour 가 여럿일 때의 클래스 이름 변경. 하네스는 있다(`Tools/verify-effect-by-operation.md`).
-   **Unity 를 켜야 하는 유일한 항목이다**
+3. ~~**`effectByOperation` 의 남은 연산**~~ — **완료(2026-08-28, Unity 라이브).**
+   `moveOrReimport`·`delete`·다중 MonoBehaviour 파일 셋 다 돌렸고 세 주장 모두 참이었다.
+   관측은 `Tools/verify-effect-by-operation.md` 의 E4·E5·E6. 남은 것은 두 개뿐이다:
+   **Resources 키 축의 이동**(폴더째 옮길 때 키 해석)과 **씬 안의 배선**에 대한 delete/move
 4. **오버로드 키 교체** — 지금은 시그니처 그래프가 **병렬**이다. 이름 키를 실제로 바꾸려면
    근거 수치가 위 표에 있다(엣지 4.2%, 벤더 비중, 그리고 UnityEvent·속성이 이름만 갖는다는 제약)
 5. **§3 의 나머지 두 건** (`totalReferenceCount` 이름은 2026-08-28 에 처리했다):
@@ -555,7 +564,7 @@ dotnet build-server shutdown
 
 ## 4. 내가 작업 중 **틀렸다가 정정한 것** (다시 재현하지 말 것)
 
-38개가 됐다. 제목만으로는 못 찾으므로 **주제별 색인**을 앞에 둔다.
+39개가 됐다. 제목만으로는 못 찾으므로 **주제별 색인**을 앞에 둔다.
 새 기능을 시작하기 전에 **해당 줄의 교훈들을 먼저 읽는 것**이 이 절을 쓰는 방법이다.
 
 | 언제 읽나 | 교훈 |
@@ -1148,7 +1157,7 @@ export 됐는데 4일간 아무도 부르지 않았고, 독립 감사가 그것�
 선언 자리 요구를 걸었고(파라미터 이름이 필드로 잡히던 것), 여러 문서에 걸친 생성자의
 두 번째 범위도 싣게 했다.
 
-교훈: **"틀린 답을 없애는 가장 짧은 수정" 이 맞는 답까지 없앤다.** 정밀도(거짓을 줄였나)만
+교훈(1): **"틀린 답을 없애는 가장 짧은 수정" 이 맞는 답까지 없앤다.** 정밀도(거짓을 줄였나)만
 보고 재현율(참을 잃었나)을 안 보면, 지표는 좋아지고 답은 사라진다. 그 라운드에서 내가 본
 수치는 "field-declaration 예측 2,037건 전부 본문 밖" 이었다 — **가려진 2,417건은 그 지표에
 아예 나타나지 않는다.**
@@ -1160,9 +1169,46 @@ export 됐는데 4일간 아무도 부르지 않았고, 독립 감사가 그것�
 구현**해서 생성자 예외를 모른다(§4-(31) 의 형태가 검증자 쪽에서 난 것이다).
 
 
+**(39) 같은 규칙을 한 소비자만 고친 형태가 또 나왔다 — 그리고 조건 없는 관측을 또 인용했다 (2026-08-28).**
+
+Unity 를 켜서 `effectByOperation` 실검증(E4~E6)을 하다가 픽스처가 두 가지를 드러냈다.
+
+1. **`unity_impact_analysis` 가 타입의 스크립트 에셋을 `sourceFiles[0]` 하나로만 찾았다.**
+   메서드가 없거나 시퀀스 포인트가 없는 타입(필드만 있는 데이터 컴포넌트)은 PDB 문서가
+   안 잡히므로 **`attachedAssets` 축이 통째로 빠진 채 impactedCount 0** 이 나왔다.
+   실측: 사용자 타입 1,052 중 문서 없음 **307**, 그중 실제로 에셋에 붙은 것 **4개** —
+   `TwentyThreeBasicAttackFigure` 는 에셋 3개에 붙어 있는데 "영향 0" 이었다.
+   그리고 **`queries.js` 는 이미 파일명 폴백을 갖고 있었다**(`filename-fallback (type has no
+   method bodies…)`). 즉 같은 데이터의 같은 함정을 **한 소비자만** 고친 상태로 나흘을 보냈다 —
+   §4-(21)(22)(26)(30) 과 정확히 같은 형태이고, 이번엔 그 목록을 읽고 나서도 났다.
+   대책은 그때 적은 것과 같다: **그 데이터를 소비하는 자리를 `grep` 으로 먼저 센다.**
+   이번에는 `grep -rn "sourceFiles" Bridge/index/*.js` 가 6곳을 즉시 보여줬다.
+2. **"이 프로젝트의 CS 경고 0건" 이 틀렸다.** 실제로 재컴파일하니 3건 나온다
+   (CS0618 둘, CS0114 하나). 예전 기록은 **컴파일이 일어나지 않은 상태**의 Editor.log 를
+   본 것이다 — 콜드 빌드 4.67 s vs 5.7 s 와 **같은 종류의 착오**(조건 없이 적은 관측).
+   교훈은 §0.5 함정 표에 이미 있는 문장 그대로다: 무엇을 **어떤 조건에서** 쟀는지 적어라.
+   조건 없는 관측은 다음 사람이 "회귀" 라고 부르거나 "없다" 로 오해한다.
+
+
 ---
 
 ## 5. 부수 발견 — 실제 프로젝트 문제
+
+### 가리키는 것이 없는 로드 경로 2건 (2026-08-28 신규)
+
+`unity_index_status` 의 `danglingLoads` 로 나온다. 컴파일러도 콘솔도 침묵하고,
+런타임에 그 호출이 그냥 `null` 을 돌려준다.
+
+| 부르는 파일 | 없는 경로 |
+|---|---|
+| `Assets/1.Scripts/Effects/Editor/EffectSystemSetup.cs:30` | `Assets/5.VFX/Common/FX_Hit_Spark.prefab` |
+| `Assets/1.Scripts/Effects/Editor/EffectSystemSetup.cs:31` | `Assets/5.VFX/Common/FX_Hit_Blunt Variant.prefab` |
+
+독립 확인: `Assets/5.VFX/Common/` 폴더가 **아예 없고** `find` 로 후보 0건.
+그 파일은 그 프리팹들로 `EffectEntry` 를 만드는 에디터 오서링 스크립트다 —
+이름이 바뀌었는지, 폴더가 옮겨졌는지, 기능이 죽은 것인지는 **사람이 알아야 한다.**
+
+### Missing Script
 
 `unity_find_missing_scripts` 가 찾은 것. **인덱스와 무관하게 처리 필요.**
 
@@ -1350,7 +1396,7 @@ Bridge/
                            + `lineKind`(그 줄이 무엇인가) 와 필드 조인. file-level 은 귀속 안 함
     projectmap.js          P1 — 배치·진입점 지도(중심성 랭킹은 측정으로 기각)
     impact.js              P2 — 영향 분석. 축을 합치지 않고 unknown 을 싣는다
-    tools.js               로컬 도구 정의/디스패치, 신선도 2단 검사, 디스크 캐시(**버전 15**)
+    tools.js               로컬 도구 정의/디스패치, 신선도 2단 검사, 디스크 캐시(**버전 16**)
 Editor/Core/
   McpPathGuard.cs          경로 포함 검사
   McpAuthToken.cs          세션 토큰 + projectRoot 기록
