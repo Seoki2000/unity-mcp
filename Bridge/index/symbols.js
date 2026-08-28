@@ -104,19 +104,31 @@ function readSequencePoints(md, row, docRow) {
 
   const st = { p: 0 };
   blobUInt(b, st);                      // LocalSignature
-  if (!docRow) blobUInt(b, st);         // InitialDocument - Document 컬럼이 0 일 때만 있다
+  const initDoc = docRow || blobUInt(b, st);   // InitialDocument - Document 컬럼이 0 일 때만 있다
 
-  let first = true, line = null, minL = null, maxL = null;
+  // ⚠️ 여기서 상태가 **셋**이고 예전에는 하나였다. 그래서 27.4% 가 틀렸다(§4-(34)).
+  //   firstRecord   ΔILOffset 이 절대값인 첫 레코드인가
+  //   absolute      다음 **비숨은** 레코드의 줄·열이 절대값인가 (blob 전체에서 한 번)
+  //   curDoc        지금 어느 document 의 포인트를 읽고 있나 (document-record 로 바뀐다)
+  // 숨은 포인트(ΔLines=0 ∧ ΔColumns=0)는 줄·열 필드를 **갖지 않는다.** 예전 코드는
+  // 숨은 포인트를 만나면 `first = false` 로 내려서, 그 뒤 첫 실제 포인트의 **절대 줄**을
+  // 부호있는 델타로 읽었다. 압축 정수는 부호 유무로 해석이 달라지므로(106 -> 53) 값이
+  // 조용히 어긋나고, 그 뒤 델타가 그 오차 위에 쌓인다. 음수 줄번호가 그 결과다.
+  let firstRecord = true, absolute = true, curDoc = initDoc;
+  let line = null, minL = null, maxL = null;
   while (st.p < b.length) {
     const ilDelta = blobUInt(b, st);
     // 첫 레코드가 아닌데 IL 델타가 0 이면 document-record 다(여러 파일에 걸친 메서드).
-    if (!first && ilDelta === 0) { blobUInt(b, st); continue; }
+    if (!firstRecord && ilDelta === 0) { curDoc = blobUInt(b, st); continue; }
+    firstRecord = false;
     const dLines = blobUInt(b, st);
     const dCols = dLines === 0 ? blobUInt(b, st) : blobInt(b, st);
-    if (dLines === 0 && dCols === 0) { first = false; continue; }   // 숨은 포인트
-    if (first) { line = blobUInt(b, st); blobUInt(b, st); first = false; }
+    if (dLines === 0 && dCols === 0) continue;    // 숨은 포인트 — 줄·열이 없다. absolute 를 건드리지 않는다
+    if (absolute) { line = blobUInt(b, st); blobUInt(b, st); absolute = false; }
     else { line += blobInt(b, st); blobInt(b, st); }
     if (line === HIDDEN_LINE) continue;
+    // 이 메서드의 파일이 아닌 포인트는 범위에 넣지 않는다(부분 클래스·생성 코드).
+    if (curDoc !== initDoc) continue;
     if (minL === null || line < minL) minL = line;
     if (maxL === null || line > maxL) maxL = line;
   }
@@ -299,6 +311,20 @@ function readAssembly(root, dllPath) {
       if (relPath) sourceFiles.push(relPath);
     }
     sourceFiles.sort();
+
+    // 부분 클래스(partial)는 파일이 여럿이다. 그때 **어느 메서드가 어느 파일인지**를
+    // 잃으면 "이 파일의 메서드들" 이 다른 파일의 메서드까지 포함한다 — 겹치는 범위와
+    // 디스크 대조 실패로 나타났다(2026-08-28: 대조 실패 1,772건의 주된 몫).
+    // 파일이 하나인 타입에는 싣지 않는다(대부분이 그렇다 — 캐시를 늘리지 않기 위해).
+    if (sourceFiles.length > 1 && methodDoc) {
+      for (const m of methods) {
+        const d = methodDoc.get(m.row);
+        if (!d) continue;
+        const rel = toProjectRelative(root, d);
+        const ix = rel ? sourceFiles.indexOf(rel) : -1;
+        if (ix >= 0) m.fileIndex = ix;
+      }
+    }
 
     types.push({
       // TypeDef 행. NestedClass(0x29) 대조로 선언 타입을 찾는 데 쓴다. 아래에서 지운다.
