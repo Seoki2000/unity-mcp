@@ -137,7 +137,8 @@ P3-b 줄 귀속 정밀화 · `effectByOperation` 실검증 · Missing Script 전
 | 항목 | 상태 |
 |---|---|
 | 리포 | 워킹트리 깨끗, 브랜치 `optimized`. **원격에는 아직 안 올렸다 — push 는 사용자 확인 후.** 정확한 HEAD 는 `git log --oneline` 으로 볼 것 — 여기 해시를 적으면 그 커밋 자신 때문에 항상 낡는다 |
-| **Unity** | **켜 둔 채로 끝냈다**(PID 는 `Get-Process Unity` 로 확인). 세션 후반의 `effectByOperation` 실검증(E4~E6)에 필요해서 켰다 — 넘겨받는 사람이 안 쓸 거면 꺼도 된다. 켜는 방법은 아래 "Unity 를 켤 때" |
+| **Unity** | **꺼져 있다.** 세션 후반의 실검증(E4~E6)과 정리에 필요해서 켰다가, 정리를 끝내고 `File/Exit` 로 껐다(넘겨받은 상태와 같다). 켜는 방법은 아래 "Unity 를 켤 때" |
+| **게임 레포** | `C:/Unity/MainProject` 브랜치 `feature/Boss23` 에 **커밋하지 않은 변경 1건**이 있다 — `Assets/99.Settings/DefaultVolumeProfile.asset`(고아 컴포넌트 9개 제거, §5). 되돌리기는 `git checkout --` 한 번. 그 밖에 기존 `M ProjectSettings/EditorBuildSettings.asset` 는 이 작업과 무관하다 |
 | `tools/list` | **85개 / 43,368 B / 도구당 510.2** — 배열 기준. 응답 줄은 43,412 B, 디스크 캐시는 43,415 B. **이 세션은 도구 정의를 건드리지 않았다**(응답 필드만 늘었다) |
 | 인덱스 캐시 | **버전 17**(12 에서 다섯 번 올림 — 구 캐시는 틀린 줄 범위·짧은 `endLine`·빠진 두 번째 문서 범위·`danglingLoads` 부재·빠진 경로 로드 엣지를 담는다), **4,473,393 B(약 4.47 MB, `guidCoverage: assets`)** — 전체 커버리지로 빌드하면 약 **8.16 MB** 다. 어느 커버리지인지 안 적으면 두 배 차이가 회귀로 보인다 (`fileIndex` 588 + `extraSpans` 5 + `danglingLoads` 2). 참조 엣지 **6,306** · 호출 엣지 8,673 · 시그니처 엣지 8,848 · `guidToPath` 3,142 |
 | 콜드 빌드 | **5.69~6.90 s** (Unity **꺼짐**, 5회) / **6.79~7.49 s** (Unity 켜짐 + 검증 스크립트 동시 실행, 3회). ⚠️ 전 세션 기록 4.67~4.71 s 는 Unity **유휴**에 다른 부하 없이 잰 값이다 — 셋은 조건이 다른 셋이다. 웜 질의 13~22 ms |
