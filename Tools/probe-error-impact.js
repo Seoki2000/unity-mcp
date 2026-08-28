@@ -318,6 +318,8 @@ check('본문 안의 줄에 field-declaration 을 붙이지 않는다 (모집단
   for (let k = 0; k < rows.length; k += 50) {
     for (const e of (call({ errors: rows.slice(k, k + 50) }).errors || [])) {
       if (!e.method || e.method.containment !== 'exact') continue;
+      // 생성자 범위는 예외다 — 필드 초기화자가 그 안에 있으므로 분류를 돌린다(프로브 22).
+      if (/^\.c?ctor$/.test(e.method.name)) continue;
       body++;
       if (e.lineKind !== 'in-method-body' || e.member) {
         bad++;
@@ -327,6 +329,61 @@ check('본문 안의 줄에 field-declaration 을 붙이지 않는다 (모집단
   }
   return { ok: body > 200 && bad === 0,
            detail: `본문 줄 ${body} 중 다른 kind ${bad}` + (samples.length ? ` — ${samples.join(' / ')}` : '') };
+});
+
+// ── 독립 검증 2차가 짚은 것 (2026-08-28) ─────────────────────────────────
+// `exact` 를 무조건 `in-method-body` 로 처리한 것이 너무 뭉툭했다. 시퀀스 포인트는
+// **필드 초기화자**에도 붙는다(`.ctor`/`.cctor` 범위). 그래서 진짜 필드 선언 2,417줄이
+// `in-method-body` 로 나가며 필드 정보가 사라졌다. 그리고 필드 이름이 줄에 있는지만
+// 봤으므로 **메서드 시그니처의 파라미터 이름**이 필드로 잡혔다(정밀도 83.3%).
+
+// 22. ⭐ 필드 초기화자 줄은 `.cctor` 범위 안이어도 필드로 답해야 한다.
+check('정적 필드 초기화자 줄이 field-declaration 으로 나온다 (재현)', () => {
+  const f = 'Assets/1.Scripts/Dev/Editor/DevBuildSceneList.cs';
+  const src = fs.readFileSync(path.join(ROOTDIR, f), 'utf8').split(String.fromCharCode(10));
+  const L = src.findIndex(t => /DevScenes\s*=\s*$/.test(t.trim())) + 1;   // 줄번호를 추측하지 않는다
+  if (!L) return { ok: false, detail: 'DevScenes 초기화자 줄을 못 찾았다' };
+  const e = call({ errors: [{ file: f, line: L, message: 'CS0246: x' }] }).errors[0];
+  return { ok: e.lineKind === 'field-declaration' && e.member && e.member.name === 'DevScenes',
+           detail: `line ${L} -> lineKind=${e.lineKind}, member=${e.member ? e.member.name : 'null'}, ` +
+                   `containment=${e.method ? e.method.containment + ' in ' + e.method.name : 'null'}` };
+});
+
+// 23. ⭐ 메서드 시그니처 줄을 필드로 답하면 안 된다. 파라미터 이름이 다른 타입의 필드와
+//     같은 이름일 수 있다(실측 반례: `TryStart(string name, ...)` 가 `Cat.name` 으로 나갔다).
+check('메서드 시그니처 줄을 field-declaration 이라고 하지 않는다 (재현)', () => {
+  const f = 'Assets/1.Scripts/Dev/Profiler/Editor/ProfilerWindow.cs';
+  const src = fs.readFileSync(path.join(ROOTDIR, f), 'utf8').split(String.fromCharCode(10));
+  const L = src.findIndex(t => /ProfilerRecorder\s+TryStart\s*\(/.test(t)) + 1;
+  if (!L) return { ok: false, detail: 'TryStart 시그니처 줄을 못 찾았다' };
+  const e = call({ errors: [{ file: f, line: L, message: 'CS0246: x' }] }).errors[0];
+  return { ok: e.lineKind !== 'field-declaration' && !e.member,
+           detail: `line ${L} -> lineKind=${e.lineKind}, member=${e.member ? e.member.name : 'null'}` };
+});
+
+// 24. ⭐ 여러 문서에 걸친 생성자 — 두 번째 파일의 범위도 그 파일 뷰에 있어야 한다.
+//     부분 클래스의 필드 초기화자가 파일마다 있으면 `.ctor` 의 시퀀스 포인트도 문서 둘에
+//     걸친다. 주 문서만 남기면 두 번째 파일의 그 줄이 **다음 메서드로** 귀속된다.
+check('여러 문서에 걸친 생성자의 두 번째 범위가 그 파일에 있다', () => {
+  const sym = idx.symbols;
+  let found = null;
+  for (const [fn, info] of sym.typeByFullName) {
+    if ((info.sourceFiles || []).length < 2) continue;
+    for (const m of (info.methods || [])) {
+      if (!m.name.startsWith('.') || !Array.isArray(m.extraSpans) || !m.extraSpans.length) continue;
+      found = { type: fn, m, files: info.sourceFiles };
+      break;
+    }
+    if (found) break;
+  }
+  if (!found) return { ok: false, detail: 'extraSpans 를 가진 생성자를 못 찾았다' };
+  const ex = found.m.extraSpans[0];
+  const file = found.files[ex.fileIndex];
+  const spans = ei.methodSpansForFile(idx, file);
+  const hit = spans.find(s => s.name === found.m.name && s.line === ex.line);
+  return { ok: !!hit && !!file,
+           detail: `${found.type}::${found.m.name} 두 번째 범위 ${file ? file.split('/').pop() : '?'}:${ex.line}-${ex.endLine} ` +
+                   `-> 파일 뷰에 ${hit ? '있다' : '없다'}` };
 });
 
 // 표본 고르기 — 인덱스에서 시작해 소스로 내려간다(§4-(27): 추측으로 고르면 보장이 없다).

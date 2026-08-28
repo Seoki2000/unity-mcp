@@ -114,6 +114,10 @@ function readSequencePoints(md, row, docRow) {
   // 숨은 포인트를 만나면 `first = false` 로 내려서, 그 뒤 첫 실제 포인트의 **절대 줄**을
   // 부호있는 델타로 읽었다. 압축 정수는 부호 유무로 해석이 달라지므로(106 -> 53) 값이
   // 조용히 어긋나고, 그 뒤 델타가 그 오차 위에 쌓인다. 음수 줄번호가 그 결과다.
+  // 문서마다 범위를 따로 모은다. 한 메서드의 시퀀스 포인트가 문서 둘에 걸치는 일이
+  // 실제로 있다 — 부분 클래스의 필드 초기화자가 파일마다 있으면 `.ctor` 가 그렇다
+  // (실측 5개). 주 문서만 남기면 두 번째 파일의 그 줄이 **다음 메서드로** 귀속된다.
+  const byDoc = new Map();
   let firstRecord = true, absolute = true, curDoc = initDoc;
   let line = null, minL = null, maxL = null;
   while (st.p < b.length) {
@@ -127,7 +131,14 @@ function readSequencePoints(md, row, docRow) {
     if (absolute) { line = blobUInt(b, st); blobUInt(b, st); absolute = false; }
     else { line += blobInt(b, st); blobInt(b, st); }
     if (line === HIDDEN_LINE) continue;
-    // 이 메서드의 파일이 아닌 포인트는 범위에 넣지 않는다(부분 클래스·생성 코드).
+    const endOfPointAny = line + dLines;
+    const cur = byDoc.get(curDoc);
+    if (!cur) byDoc.set(curDoc, { line, endLine: endOfPointAny });
+    else {
+      if (line < cur.line) cur.line = line;
+      if (endOfPointAny > cur.endLine) cur.endLine = endOfPointAny;
+    }
+    // 주 문서의 범위가 `line`/`endLine` 이고, 나머지 문서는 아래에서 `extra` 로 낸다.
     if (curDoc !== initDoc) continue;
     if (minL === null || line < minL) minL = line;
     // `endLine` 은 **마지막 포인트의 끝 줄**이다. 시작 줄의 최댓값으로 두면 여러 줄에
@@ -136,7 +147,10 @@ function readSequencePoints(md, row, docRow) {
     const endOfPoint = line + dLines;
     if (maxL === null || endOfPoint > maxL) maxL = endOfPoint;
   }
-  return minL === null ? null : { line: minL, endLine: maxL, doc: initDoc };
+  if (minL === null) return null;
+  const extra = [];
+  for (const [d, r] of byDoc) if (d !== initDoc) extra.push({ doc: d, line: r.line, endLine: r.endLine });
+  return { line: minL, endLine: maxL, doc: initDoc, ...(extra.length ? { extra } : {}) };
 }
 
 function readPdbMethodDocuments(pdbPath) {
@@ -168,7 +182,13 @@ function readPdbMethodDocuments(pdbPath) {
     // 같은 패스에서 줄 범위도 읽는다. PDB 를 한 번 더 열 이유가 없다.
     try {
       const span = readSequencePoints(md, r, docRow);
-      if (span) methodSpan.set(r, span);
+      if (span) {
+        // document 행 번호는 이 함수 밖에서 쓸 수 없다 — 이름으로 바꿔 둔다.
+        if (span.extra) {
+          span.extra = span.extra.map(e => ({ docName: docNames.get(e.doc) || '', line: e.line, endLine: e.endLine }));
+        }
+        methodSpan.set(r, span);
+      }
       // Document 컬럼이 0 인 메서드(= 여러 문서에 걸친 것)도 **주 문서를 안다** —
       // blob 의 InitialDocument 다. 이걸 안 쓰면 그 메서드가 부분 클래스의 모든 파일
       // 뷰에 다 나온다(독립 검증이 짚은 22건: `.ctor`/`.cctor` 5개 × 파일 수).
@@ -327,10 +347,23 @@ function readAssembly(root, dllPath) {
     if (sourceFiles.length > 1 && methodDoc) {
       for (const m of methods) {
         const d = methodDoc.get(m.row);
-        if (!d) continue;
-        const rel = toProjectRelative(root, d);
-        const ix = rel ? sourceFiles.indexOf(rel) : -1;
-        if (ix >= 0) m.fileIndex = ix;
+        if (d) {
+          const rel = toProjectRelative(root, d);
+          const ix = rel ? sourceFiles.indexOf(rel) : -1;
+          if (ix >= 0) m.fileIndex = ix;
+        }
+        // 문서 둘 이상에 시퀀스 포인트가 있는 메서드(부분 클래스의 생성자)는 두 번째
+        // 범위도 싣는다. 없으면 그 파일의 그 줄이 다음 메서드로 귀속된다.
+        const sp = methodDoc.spans && methodDoc.spans.get(m.row);
+        if (sp && sp.extra) {
+          const ex = [];
+          for (const e of sp.extra) {
+            const rel2 = toProjectRelative(root, e.docName);
+            const ix2 = rel2 ? sourceFiles.indexOf(rel2) : -1;
+            if (ix2 >= 0) ex.push({ fileIndex: ix2, line: e.line, endLine: e.endLine });
+          }
+          if (ex.length) m.extraSpans = ex;
+        }
       }
     }
 

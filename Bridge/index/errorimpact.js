@@ -70,7 +70,14 @@ function methodSpansForFile(index, file) {
       if (typeof m.line !== 'number') continue;
       // 부분 클래스 — 이 메서드가 다른 파일에 있으면 이 파일의 범위가 아니다.
       // 안 걸러내면 다른 파일의 줄 범위가 이 파일의 줄과 겹쳐 오류를 엉뚱한 메서드에 붙인다.
-      if (typeof m.fileIndex === 'number' && files[m.fileIndex] && files[m.fileIndex] !== file) continue;
+      if (typeof m.fileIndex === 'number' && files[m.fileIndex] && files[m.fileIndex] !== file) {
+        // 단 이 메서드가 **이 파일에도** 범위를 가질 수 있다(부분 클래스의 생성자).
+        for (const ex of (m.extraSpans || [])) {
+          if (files[ex.fileIndex] !== file) continue;
+          spans.push({ name: m.name, line: ex.line, endLine: ex.endLine, typeFullName: info.fullName });
+        }
+        continue;
+      }
       spans.push({
         name: m.name,
         line: m.line,
@@ -166,6 +173,35 @@ function attributeLine(spans, line, srcLines) {
 const FILE_LEVEL_RE = /^(?:using\s+(?:static\s+)?[A-Za-z_@]|namespace\b|#)/;
 const TYPE_DECL_RE = /\b(?:class|struct|interface|enum|record)\s+[A-Za-z_@]/;
 const IDENT_RE = /[A-Za-z_@][A-Za-z0-9_]*/g;
+// 문장으로 시작하는 줄은 선언이 아니다. `.ctor` 본문 안의 `damage = 5;` 같은 대입도
+// 아래 "앞에 타입 토큰이 있어야 한다" 규칙에서 걸린다.
+const STATEMENT_START_RE =
+  /^(?:return|if|else|for|foreach|while|switch|case|default\s*:|throw|do|try|catch|finally|yield|break|continue|lock|await|goto)\b/;
+
+/**
+ * 이 줄이 `name` 이라는 필드를 **선언하는** 자리처럼 보이는가.
+ *
+ * 요구 세 가지 — 하나라도 빠지면 파라미터·대입·호출 인자가 필드로 잡힌다:
+ *   1. 이름 앞에 `(` 가 없다        → 파라미터 목록·호출 인자를 배제
+ *   2. 이름 앞에 식별자가 하나 이상 → 타입(그리고 수정자)이 있다는 뜻.
+ *                                    `damage = 5;`(대입)은 여기서 걸린다
+ *   3. 이름 뒤가 `;` `=` `,` 또는 줄 끝 → 선언의 종결 형태
+ */
+function looksLikeDeclarationOf(s, name) {
+  const re = new RegExp('(^|[^A-Za-z0-9_])' + name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '(?![A-Za-z0-9_])', 'g');
+  let m;
+  while ((m = re.exec(s)) !== null) {
+    const at = m.index + m[1].length;
+    const before = s.slice(0, at);
+    if (before.includes('(')) continue;                       // 1
+    if (m[1] === '.') continue;                               // 1b. `this.damage = 5;` 는 대입이다
+    const identsBefore = before.match(IDENT_RE) || [];
+    if (identsBefore.length === 0) continue;                  // 2
+    const after = s.slice(at + name.length).trimStart();       // 3
+    if (after === '' || after.startsWith(';') || after.startsWith('=') || after.startsWith(',')) return true;
+  }
+  return false;
+}
 
 function classifyLine(srcLines, line, typeNames, sym) {
   if (!srcLines || typeof line !== 'number' || line <= 0 || line > srcLines.length) {
@@ -189,14 +225,21 @@ function classifyLine(srcLines, line, typeNames, sym) {
   if (TYPE_DECL_RE.test(s)) return { kind: 'type-declaration' };
 
   // 필드 — 이 파일이 선언한 타입들의 필드 이름과 맞는 것이 이 줄에 있는가.
+  //
+  // ⚠️ "이름이 줄에 있다" 만 보면 안 된다. 독립 검증(2026-08-28)이 정밀도 83.3% 를
+  // 재면서 반례를 줬다: `ProfilerRecorder TryStart(string name, int cap = 15)` 의
+  // **파라미터 이름** `name` 이 다른 타입의 필드 `Cat.name` 으로 나갔다.
+  // 그래서 선언 자리인지를 같이 본다(아래 `looksLikeDeclarationOf`).
+  if (STATEMENT_START_RE.test(s)) return { kind: 'unknown' };
   const names = new Set();
-  const idents = s.match(IDENT_RE) || [];
-  if (idents.length && sym && sym.typeByFullName) {
+  if (sym && sym.typeByFullName) {
     for (const fn of (typeNames || [])) {
       const info = sym.typeByFullName.get(fn);
       for (const f of ((info && info.fields) || [])) {
         if (!f.name || f.name.startsWith('<')) continue;   // 컴파일러 생성 백킹 필드는 소스에 없다
-        if (idents.includes(f.name)) names.add(JSON.stringify({ name: f.name, type: f.type || null, declaringType: info.fullName }));
+        if (looksLikeDeclarationOf(s, f.name)) {
+          names.add(JSON.stringify({ name: f.name, type: f.type || null, declaringType: info.fullName }));
+        }
       }
     }
   }
@@ -275,11 +318,16 @@ function explain(index, args, meta) {
     // 말밖에 못 했고, gap 의 4분의 1 이상은 메서드와 무관한 파일 수준 줄이었다.
     //
     // ⚠️ **본문 안(exact)의 줄은 분류하지 않는다.** 처음엔 모든 줄에 돌렸는데, 본문 안의
-    // `damage += 1;` 같은 문장이 필드 이름을 담고 있어 `field-declaration` 으로 나갔다.
-    // 독립 검증(2026-08-28)이 그 정밀도를 18.8%(14,643 예측 중 2,754)로 측정했고,
-    // 그 오차의 거의 전부가 본문 줄이었다(12,534건). 본문 줄은 귀속이 이미 확실하므로
-    // 분류가 답을 더하지 못한다 — `in-method-body` 라고만 말한다.
-    const cls = (hit && hit.containment === 'exact')
+    // `damage += 1;` 같은 문장이 필드 이름을 담고 있어 `field-declaration` 으로 나갔다
+    // (독립 검증이 정밀도 18.8% 로 측정했다).
+    //
+    // ⚠️⚠️ 단 **생성자는 예외다.** 시퀀스 포인트는 필드 초기화자에도 붙고 그것은
+    // `.ctor`/`.cctor` 의 범위 안이다. 그래서 `exact` 를 무조건 `in-method-body` 로
+    // 처리하니 **진짜 필드 선언 2,417줄이 통째로 가려졌다**(독립 검증 2차, 2026-08-28:
+    // `private static readonly string[] DevScenes =` 이 `.cctor` 의 exact 였다).
+    // 생성자 범위 안에서는 분류를 돌린다 — 필드 선언이 그 안에 실제로 있다.
+    const inCtor = !!(hit && /^\.c?ctor$/.test(hit.name));
+    const cls = (hit && hit.containment === 'exact' && !inCtor)
       ? { kind: 'in-method-body' }
       : classifyLine(srcLines, row.line, typeNames, sym);
     row.lineKind = cls.kind;

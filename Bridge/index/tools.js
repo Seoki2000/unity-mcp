@@ -152,7 +152,9 @@ function cachePath(root) {
 // 14: 같은 날 독립 검증 후속 — `endLine` 이 마지막 포인트의 **끝 줄**이 됐고(구 캐시는
 //     시작 줄의 최댓값: 메서드 133개가 최대 22줄 짧았다), Document 컬럼이 0 인 메서드도
 //     주 문서를 갖는다(부분 클래스 누출 22건).
-const CACHE_VERSION = 14;
+// 15: 여러 문서에 걸친 메서드의 두 번째 범위(`extraSpans`, 실측 5개 — 부분 클래스의
+//     생성자). 구 캐시에는 없어 그 파일의 그 줄이 다음 메서드로 귀속된다.
+const CACHE_VERSION = 15;
 
 function saveCache(index) {
   try {
