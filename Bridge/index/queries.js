@@ -383,16 +383,16 @@ function findMissingScripts(index, args) {
 
     if (isUnityBuiltinGuid(guid)) {
       // 내장 어셈블리 참조 — 정상이다. 따로 보고만 하고 missing 에 세지 않는다.
-      builtin.push({ guid, referenceCount: list.length, sampleAssets: list.slice(0, 3) });
+      builtin.push({ guid, referencingAssetCount: list.length, sampleAssets: list.slice(0, 3) });
       continue;
     }
 
     totalRefs += list.length;
     for (const u of list) affected.add(u);
-    rows.push({ guid, referenceCount: list.length, sampleAssets: list.slice(0, 5) });
+    rows.push({ guid, referencingAssetCount: list.length, sampleAssets: list.slice(0, 5) });
   }
 
-  rows.sort((a, b) => b.referenceCount - a.referenceCount || a.guid.localeCompare(b.guid));
+  rows.sort((a, b) => b.referencingAssetCount - a.referencingAssetCount || a.guid.localeCompare(b.guid));
   const page = pageOf(rows, args.offset, args.maxResults);
 
   const notes = [];
@@ -416,7 +416,7 @@ function findMissingScripts(index, args) {
     guidCoverage: index.guidCoverage,
     missingScriptCount: rows.length,
     affectedAssetCount: affected.size,
-    totalReferenceCount: totalRefs,
+    assetGuidPairCount: totalRefs,
     returnedCount: page.items.length,
     offset: page.offset,
     nextOffset: page.nextOffset,

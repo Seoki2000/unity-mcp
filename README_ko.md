@@ -414,8 +414,12 @@ dev-0.0.1 표(레이어 A 615 ms)와 비교하면 커 보이지만, 그 표는 *
   `unity_index_rebuild` 를 손으로 부를 필요는 없다: 어셈블리 서명은 매 호출(11~18 ms),
   에셋 지문은 10초 throttle 로 대조한다.
   캐시는 `fromCache: true` 로 표시되지만 무엇이 낡았는지는 알려주지 않는다
-- **`totalReferenceCount` 는 (에셋, GUID) 쌍을 센다.** 원시 등장 횟수가 아니다. 실측 예:
-  같은 GUID 가 원시 515회 등장하지만 108개 에셋에 걸쳐 있으면 108로 보고된다
+- **`assetGuidPairCount` 는 (에셋, GUID) 쌍을 센다.** 원시 등장 횟수가 아니다. 실측 예:
+  같은 GUID 가 원시 515회 등장하지만 108개 에셋에 걸쳐 있으면 108로 보고된다.
+  행 단위 `referencingAssetCount` 도 등장 횟수가 아니라 **서로 다른 에셋 수**다.
+  dev-0.0.7 에서 `totalReferenceCount`/`referenceCount` 에서 이름을 바꿨다 — 옛 이름은
+  값이 담지 않는 것을 주장하고 있었다. 같은 응답의 `affectedAssetCount`(전역 중복 제거,
+  실측 134)와 `assetGuidPairCount`(실측 164)는 **다른 값이다**
 - **`unity_find_callers` 는 프로젝트 어셈블리 내부 호출만** 인덱스한다. UnityEngine/BCL 로
   들어가는 호출은 제외되고, 오버로드는 `Type::Method` 한 키로 병합된다
 - **`tools/list` 고정비가 여전히 `2ea969e` 보다 크다.** 다이어트로 −8.2% 를 되돌렸지만

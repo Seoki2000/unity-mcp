@@ -164,7 +164,10 @@ addresses) stay invisible — 44 such call sites here, and a zero result reports
 true incremental index refresh — a stale index is rebuilt whole (4.8 s cold), not diffed. Since
 dev-0.0.6 you no longer need to call `unity_index_rebuild` by hand: `ensureIndex` revalidates on
 every call (assembly signature 11-18 ms each call, asset fingerprint throttled to 10 s);
-`totalReferenceCount` counts (asset, GUID) pairs, not raw occurrences; `unity_find_callers`
+`assetGuidPairCount` on `unity_find_missing_scripts` counts (asset, GUID) pairs, not raw
+occurrences, and the per-row `referencingAssetCount` counts distinct assets, not occurrences
+(renamed from `totalReferenceCount` / `referenceCount` in dev-0.0.7 — the old names claimed a
+count the value never held); `unity_find_callers`
 indexes project-internal calls only. The name key still merges overloads under `Type::Method`,
 but since dev-0.0.6 a signature-keyed graph sits beside it: pass `Type::Method(int,string)` to
 address one overload, or read `perOverload` on a name query. Component
