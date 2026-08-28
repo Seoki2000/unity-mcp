@@ -60,8 +60,12 @@ function methodSpansForFile(index, file) {
   for (const fn of typeNames) {
     const info = sym.typeByFullName.get(fn);
     if (!info) continue;
+    const files = info.sourceFiles || [];
     for (const m of (info.methods || [])) {
       if (typeof m.line !== 'number') continue;
+      // 부분 클래스 — 이 메서드가 다른 파일에 있으면 이 파일의 범위가 아니다.
+      // 안 걸러내면 다른 파일의 줄 범위가 이 파일의 줄과 겹쳐 오류를 엉뚱한 메서드에 붙인다.
+      if (typeof m.fileIndex === 'number' && files[m.fileIndex] && files[m.fileIndex] !== file) continue;
       spans.push({
         name: m.name,
         line: m.line,
@@ -132,6 +136,76 @@ function attributeLine(spans, line, srcLines) {
   return Object.assign({}, best, { containment: 'gap', ...(decl !== null ? { declLine: decl } : {}) });
 }
 
+/**
+ * 그 줄이 **실제로 무엇인지** 소스에서 분류한다 (`lineKind`).
+ *
+ * 왜 필요한가 — `gap` 은 "다음 메서드로 붙인 힌트" 라고만 말했다. 실측(2026-08-28,
+ * 매핑된 559 파일 45,629 코드 줄): exact 32,995 / signature 3,363 / **gap 8,887** / 없음 384.
+ * 그 gap 8,887 의 구성이 필드·문장 2,943 · using·namespace 2,095 · 속성 1,397 ·
+ * 타입선언 728 · 시그니처꼴 692 · 기타 652 · 전처리기 380 이다.
+ * 즉 **4분의 1 이상이 메서드와 아무 관계가 없는 파일 수준 줄**인데 "바로 다음 메서드" 로
+ * 붙고 있었다(`using` 한 줄의 CS0246 이 `.ctor` 로 귀속됐다).
+ *
+ *   file-level        using / namespace / 전처리기 — 메서드 귀속을 아예 하지 않는다
+ *   type-attribute    속성 줄이고 아래가 타입 선언이다 — 타입이 깨진다
+ *   member-attribute  속성 줄이고 아래가 멤버다
+ *   type-declaration  타입 선언 줄
+ *   field-declaration 필드 선언 줄. **인덱스의 필드 이름과 맞았을 때만** 그렇게 말한다
+ *   blank-or-comment  빈 줄·주석
+ *   unknown           위 어느 것도 아니거나 소스를 못 읽었다 — 추측하지 않는다
+ *
+ * 필드는 **이름 교차검증**으로만 확정한다. 문법만 보고 "필드 선언" 이라고 하면
+ * 지역 변수·프로퍼티·object initializer 가 같은 모양으로 들어온다.
+ */
+const FILE_LEVEL_RE = /^(?:using\s+(?:static\s+)?[A-Za-z_@]|namespace\b|#)/;
+const TYPE_DECL_RE = /\b(?:class|struct|interface|enum|record)\s+[A-Za-z_@]/;
+const IDENT_RE = /[A-Za-z_@][A-Za-z0-9_]*/g;
+
+function classifyLine(srcLines, line, typeNames, sym) {
+  if (!srcLines || typeof line !== 'number' || line <= 0 || line > srcLines.length) {
+    return { kind: 'unknown' };
+  }
+  const text = String(srcLines[line - 1] || '');
+  const s = text.trim();
+  if (!s || s.startsWith('//') || s.startsWith('*') || s.startsWith('/*')) return { kind: 'blank-or-comment' };
+  if (FILE_LEVEL_RE.test(s)) return { kind: 'file-level' };
+
+  if (s.startsWith('[') && !s.startsWith('[]')) {
+    // 아래로 내려가며 첫 코드 줄을 본다 — 속성이 여러 줄 붙을 수 있다.
+    for (let k = line; k < srcLines.length; k++) {
+      const n = String(srcLines[k] || '').trim();
+      if (!n || n.startsWith('//') || n.startsWith('[')) continue;
+      return { kind: TYPE_DECL_RE.test(n) ? 'type-attribute' : 'member-attribute' };
+    }
+    return { kind: 'unknown' };          // 속성 뒤에 코드가 없다 — 단정하지 않는다
+  }
+
+  if (TYPE_DECL_RE.test(s)) return { kind: 'type-declaration' };
+
+  // 필드 — 이 파일이 선언한 타입들의 필드 이름과 맞는 것이 이 줄에 있는가.
+  const names = new Set();
+  const idents = s.match(IDENT_RE) || [];
+  if (idents.length && sym && sym.typeByFullName) {
+    for (const fn of (typeNames || [])) {
+      const info = sym.typeByFullName.get(fn);
+      for (const f of ((info && info.fields) || [])) {
+        if (!f.name || f.name.startsWith('<')) continue;   // 컴파일러 생성 백킹 필드는 소스에 없다
+        if (idents.includes(f.name)) names.add(JSON.stringify({ name: f.name, type: f.type || null, declaringType: info.fullName }));
+      }
+    }
+  }
+  if (names.size === 1) {
+    const m = JSON.parse([...names][0]);
+    return { kind: 'field-declaration', member: { kind: 'field', name: m.name, type: m.type, declaringType: m.declaringType } };
+  }
+  if (names.size > 1) {
+    // 한 줄에 여러 필드가 맞았다(`int a, b;` 또는 초기화자에 다른 필드가 나온다).
+    // 하나로 정하지 않고 후보를 준다.
+    return { kind: 'field-declaration', candidates: [...names].map(x => JSON.parse(x).name).sort().slice(0, 8) };
+  }
+  return { kind: 'unknown' };
+}
+
 function explain(index, args, meta) {
   const list = Array.isArray(args && args.errors) ? args.errors : null;
   if (!list || list.length === 0) {
@@ -190,7 +264,22 @@ function explain(index, args, meta) {
       }
     }
     const hit = attributeLine(spans, row.line, srcLines);
-    if (hit) {
+
+    // 그 줄이 실제로 무엇인지 먼저 말한다. `gap` 만으로는 "다음 메서드로 붙인 힌트" 라는
+    // 말밖에 못 했고, gap 의 4분의 1 이상은 메서드와 무관한 파일 수준 줄이었다.
+    const cls = classifyLine(srcLines, row.line, typeNames, sym);
+    row.lineKind = cls.kind;
+    if (cls.member) row.member = cls.member;
+    else if (cls.candidates) row.memberCandidates = cls.candidates;
+
+    if (cls.kind === 'file-level') {
+      // 메서드에 붙이지 않는다. 붙이면 거짓 힌트다 — `using` 한 줄의 CS0246 이
+      // 컴파일러 생성 `.ctor` 로 귀속되고 있었다.
+      row.method = null;
+      row.methodNote =
+        'file-level line (using / namespace / preprocessor), so it is attributed to no method. ' +
+        'The type axis below still answers: these are the types this file declares.';
+    } else if (hit) {
       row.method = {
         name: hit.name,
         line: hit.line,
@@ -208,7 +297,8 @@ function explain(index, args, meta) {
         row.method.containmentNote =
           'line is before this method but outside its declaration block, so it may belong to a field ' +
           'initializer, a type-level attribute or another member entirely. Attributed to the next ' +
-          'method by position - a hint, not a fact.' +
+          'method by position - a hint, not a fact. Read lineKind (' + cls.kind + ') for what the ' +
+          'line itself is; when it is field-declaration the member field names the real target.' +
           (srcLines ? '' : ' The source file could not be read, so the declaration line was not checked.');
       }
     } else {
@@ -287,5 +377,5 @@ function explain(index, args, meta) {
 }
 
 module.exports = {
-  explain, normalizePath, classifyOrigin, methodSpansForFile, attributeLine, MAX_ERRORS,
+  explain, normalizePath, classifyOrigin, methodSpansForFile, attributeLine, classifyLine, MAX_ERRORS,
 };

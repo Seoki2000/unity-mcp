@@ -159,16 +159,25 @@ check('시그니처 줄이 signature 로 승급된다', () => {
 });
 
 // 13. 메서드와 무관한 줄은 `gap` 이다 — 승급하지 않는다.
-check('메서드 밖의 줄은 gap 이고 승급하지 않는다', () => {
-  const e = call({ errors: [{ file: BA, line: 1, message: 'x' }] }).errors[0];
+//     ⚠️ 예전엔 line 1(= `using`)로 검사했다. 그 줄은 이제 file-level 이라 method 가 null 이다
+//     (프로브 15). 그래서 **타입 선언 줄**로 바꿨다 — 여전히 gap 이고 승급하지 않아야 한다.
+check('타입 선언 줄은 gap 이고 승급하지 않는다', () => {
+  const src = fs.readFileSync(path.join(ROOTDIR, BA), 'utf8').split(String.fromCharCode(10));
+  const L = src.findIndex(t => /\b(class|struct)\s+BaseAttack\b/.test(t)) + 1;
+  if (!L) return { ok: false, detail: 'BaseAttack 선언 줄을 못 찾았다' };
+  const e = call({ errors: [{ file: BA, line: L, message: 'x' }] }).errors[0];
   const m = e.method;
-  return { ok: m && m.containment === 'gap',
-           detail: m ? `line 1 -> ${m.name} (${m.containment})` : 'method 없음' };
+  return { ok: !!m && m.containment === 'gap' && e.lineKind === 'type-declaration',
+           detail: m ? `line ${L} -> ${m.name} (${m.containment}), lineKind=${e.lineKind}` : 'method 없음' };
 });
 
 // 14. 경계 — 확신도가 네 값 중 하나여야 한다. 새 값이 조용히 새면 읽는 쪽이 모른다.
 check('확신도가 exact/signature/gap 중 하나다 (경계)', () => {
-  const lines = [140, 130, 128, 1, 45, 200, 9999];
+  // ⚠️ line 1 이 file-level 이 되면서 이 표본에서 gap 이 사라졌다 — 이름이 gap 을 말하는데
+  // 관측하지 않는 검사가 된다(§4-(31) 의 형태). 타입 선언 줄을 표본에 넣어 gap 을 되살린다.
+  const decl = fs.readFileSync(path.join(ROOTDIR, BA), 'utf8')
+                 .split(String.fromCharCode(10)).findIndex(t => /\b(class|struct)\s+BaseAttack\b/.test(t)) + 1;
+  const lines = [140, 130, 128, 1, 45, 200, 9999, decl];
   const seen = new Set();
   for (const L of lines) {
     const m = call({ errors: [{ file: BA, line: L, message: 'x' }] }).errors[0].method;
@@ -176,9 +185,151 @@ check('확신도가 exact/signature/gap 중 하나다 (경계)', () => {
   }
   const allowed = new Set(['exact', 'signature', 'gap']);
   const bad = [...seen].filter(x => !allowed.has(x));
-  return { ok: bad.length === 0 && seen.size >= 2,
+  return { ok: bad.length === 0 && seen.size >= 2 && seen.has('gap'),
            detail: `관측된 값: ${[...seen].join(', ')}` + (bad.length ? ` / 허용 밖: ${bad.join(',')}` : '') };
 });
+
+// ── gap 줄이기 (2026-08-28) ────────────────────────────────────────────────
+// 실측 먼저(구현 전에 쓴다 — §4-(22)): 매핑된 소스 559 파일 45,629 코드 줄을 귀속하니
+//   exact 32,995 (72.3%) / signature 3,363 (7.4%) / **gap 8,887 (19.5%)** / 없음 384.
+// gap 8,887 의 구성: 필드·문장 2,943(33.1%) · using·namespace 2,095(23.6%) ·
+//   속성 1,397(15.7%) · 타입선언 728(8.2%) · 시그니처꼴 692(7.8%) · 기타 652 · 전처리기 380.
+// 즉 gap 의 4분의 1 이상은 **메서드와 아무 상관이 없는 파일 수준 줄**인데 "바로 다음
+// 메서드" 로 붙고 있었다.
+
+// 15. ⭐ 파일 수준 줄은 메서드에 귀속하지 않는다. 붙이면 거짓 힌트다.
+check('using 줄은 메서드에 귀속하지 않는다 (file-level)', () => {
+  const src = fs.readFileSync(path.join(ROOTDIR, BA), 'utf8').split(String.fromCharCode(10));
+  const L = src.findIndex(t => /^using\s+[A-Za-z_@]/.test(t.trim())) + 1;   // 줄번호를 추측하지 않는다
+  if (!L) return { ok: false, detail: 'using 줄을 못 찾았다' };
+  const e = call({ errors: [{ file: BA, line: L, message: 'CS0246: 없는 타입' }] }).errors[0];
+  return { ok: e.lineKind === 'file-level' && e.method === null && !!e.methodNote,
+           detail: `line ${L} -> lineKind=${e.lineKind}, method=${e.method === null ? 'null' : (e.method && e.method.name)}` };
+});
+
+// 16. ⭐ 필드 선언 줄은 **인덱스의 필드와 조인**된다. 다른 경로로 구한 답과 맞춘다(§4-(31)).
+//     표본은 추측하지 않고 인덱스 -> 소스 순서로 찾는다(§4-(27)).
+check('필드 선언 줄이 필드로 조인된다 (타입 심볼과 왕복)', () => {
+  const pick = pickFieldDeclLine();
+  if (!pick) return { ok: false, detail: '조건에 맞는 (파일, 필드) 를 못 찾았다' };
+  const e = call({ errors: [{ file: pick.file, line: pick.line, message: 'CS0246: x' }] }).errors[0];
+  const m = e.member;
+  return { ok: e.lineKind === 'field-declaration' && !!m && m.kind === 'field' &&
+               m.name === pick.field && m.type === pick.type,
+           detail: `${pick.file.split('/').pop()}:${pick.line} ${pick.field} -> ` +
+                   `lineKind=${e.lineKind}, member=${m ? m.name + ':' + m.type : 'null'} (기대 ${pick.field}:${pick.type})` };
+});
+
+// 17. 속성 줄은 **타입 속성**과 **멤버 속성**을 가른다 — 무엇이 깨지는지가 다르다.
+check('타입 속성과 멤버 속성을 구분한다', () => {
+  const t = pickAttributeLine(true), mm = pickAttributeLine(false);
+  if (!t || !mm) return { ok: false, detail: `표본 없음 (타입 ${!!t}, 멤버 ${!!mm})` };
+  const a = call({ errors: [{ file: t.file, line: t.line, message: 'x' }] }).errors[0];
+  const b = call({ errors: [{ file: mm.file, line: mm.line, message: 'x' }] }).errors[0];
+  return { ok: a.lineKind === 'type-attribute' && b.lineKind === 'member-attribute',
+           detail: `타입 ${t.file.split('/').pop()}:${t.line} -> ${a.lineKind} / ` +
+                   `멤버 ${mm.file.split('/').pop()}:${mm.line} -> ${b.lineKind}` };
+});
+
+// 18. 분류가 실제로 gap 을 덮는가. 덮지 못하면 이름만 붙인 것이다.
+//     표본은 파일 순서대로 앞 40개 파일에서 exact 가 아닌 줄 전부 — 고르지 않는다.
+check('exact 아닌 줄의 절반 이상이 unknown 이 아니다 (모집단 검사)', () => {
+  const rows = [];
+  const files = [...idx.symbols.typesBySourceFile.keys()].filter(f => f.startsWith('Assets/')).slice(0, 40);
+  for (const f of files) {
+    let src; try { src = fs.readFileSync(path.join(ROOTDIR, f), 'utf8').split(String.fromCharCode(10)); } catch { continue; }
+    for (let i = 1; i <= src.length; i++) {
+      const s = src[i - 1].trim();
+      if (!s || s.startsWith('//') || s === '{' || s === '}') continue;
+      rows.push({ file: f, line: i, message: 'x' });
+    }
+  }
+  let total = 0, unknown = 0;
+  for (let k = 0; k < rows.length; k += 50) {
+    for (const e of (call({ errors: rows.slice(k, k + 50) }).errors || [])) {
+      if (e.method && e.method.containment === 'exact') continue;      // 이미 확실한 자리
+      total++;
+      if (!e.lineKind || e.lineKind === 'unknown') unknown++;
+    }
+  }
+  const covered = total - unknown;
+  return { ok: total > 100 && covered >= total / 2,
+           detail: `exact 아닌 줄 ${total} 중 분류됨 ${covered} (${(covered * 100 / (total || 1)).toFixed(1)}%)` };
+});
+
+// 19. 경계 — lineKind 값이 조용히 새면 읽는 쪽이 모른다. 그리고 **member 는 인덱스에
+//     실제 필드가 있을 때만** 실려야 한다(추측 금지).
+check('lineKind 가 허용된 값이고 member 를 지어내지 않는다 (경계)', () => {
+  const src = fs.readFileSync(path.join(ROOTDIR, BA), 'utf8').split(String.fromCharCode(10));
+  const rows = src.map((_, i) => ({ file: BA, line: i + 1, message: 'x' })).slice(0, 50);
+  const allowed = new Set(['file-level', 'type-attribute', 'member-attribute', 'type-declaration',
+                           'field-declaration', 'blank-or-comment', 'unknown']);
+  const fieldNames = new Set();
+  for (const fn of (idx.symbols.typesBySourceFile.get(BA) || [])) {
+    const info = idx.symbols.typeByFullName.get(fn);
+    for (const f of ((info && info.fields) || [])) fieldNames.add(f.name);
+  }
+  const kinds = new Set();
+  let fabricated = 0;
+  for (const e of (call({ errors: rows }).errors || [])) {
+    if (e.lineKind) kinds.add(e.lineKind);
+    if (e.member && !fieldNames.has(e.member.name)) fabricated++;
+  }
+  const bad = [...kinds].filter(x => !allowed.has(x));
+  return { ok: bad.length === 0 && fabricated === 0 && kinds.size >= 2,
+           detail: `관측 ${[...kinds].join(', ')}` + (bad.length ? ` / 허용 밖 ${bad.join(',')}` : '') +
+                   ` / 지어낸 member ${fabricated}` };
+});
+
+// 표본 고르기 — 인덱스에서 시작해 소스로 내려간다(§4-(27): 추측으로 고르면 보장이 없다).
+function pickFieldDeclLine() {
+  const sym = idx.symbols;
+  for (const [file, names] of sym.typesBySourceFile) {
+    if (!file.startsWith('Assets/')) continue;
+    let src;
+    try { src = fs.readFileSync(path.join(ROOTDIR, file), 'utf8').split(String.fromCharCode(10)); } catch { continue; }
+    for (const fn of names) {
+      const info = sym.typeByFullName.get(fn);
+      if (!info || !info.fields || !info.methods) continue;
+      const bodyStarts = info.methods.filter(m => typeof m.line === 'number').map(m => m.line);
+      if (!bodyStarts.length) continue;
+      const firstBody = Math.min(...bodyStarts);
+      for (const f of info.fields) {
+        if (!f.name || f.name.startsWith('<') || !f.type) continue;
+        const re = new RegExp('(^|[^A-Za-z0-9_])' + f.name + '([^A-Za-z0-9_]|$)');
+        const hits = [];
+        for (let i = 1; i < firstBody; i++) if (re.test(src[i - 1] || '')) hits.push(i);
+        if (hits.length !== 1) continue;                       // 파일에서 유일하게 나오는 것만 쓴다
+        const text = (src[hits[0] - 1] || '').trim();
+        if (!text.endsWith(';') || text.startsWith('[') || text.startsWith('//')) continue;
+        return { file, line: hits[0], field: f.name, type: f.type };
+      }
+    }
+  }
+  return null;
+}
+
+function pickAttributeLine(wantType) {
+  const TYPE_DECL = /\b(class|struct|interface|enum|record)\s+[A-Za-z_@]/;
+  for (const file of idx.symbols.typesBySourceFile.keys()) {
+    if (!file.startsWith('Assets/')) continue;
+    let src;
+    try { src = fs.readFileSync(path.join(ROOTDIR, file), 'utf8').split(String.fromCharCode(10)); } catch { continue; }
+    for (let i = 0; i < src.length; i++) {
+      const s = src[i].trim();
+      if (!s.startsWith('[') || s.startsWith('[]')) continue;
+      let k = i + 1;
+      while (k < src.length) {
+        const n = src[k].trim();
+        if (!n || n.startsWith('//') || n.startsWith('[')) { k++; continue; }
+        break;
+      }
+      if (k >= src.length) continue;
+      if (TYPE_DECL.test(src[k]) === !!wantType) return { file, line: i + 1 };
+    }
+  }
+  return null;
+}
 
 console.log(`\n${pass}/${pass + fail}`);
 process.exit(fail === 0 ? 0 : 1);
