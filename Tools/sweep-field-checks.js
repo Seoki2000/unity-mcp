@@ -32,12 +32,18 @@ const PROJECT = process.argv[2] || 'C:/Unity/MainProject';
 
 
 // §6 이 기록한 값 (2026-08-24 감사 후 재측정).
+// ⚠️ 2026-08-28 에 둘을 내렸다 — **도구가 덜 보게 된 것이 아니라 프로젝트를 정리했다.**
+// `Assets/99.Settings/DefaultVolumeProfile.asset` 의 고아 컴포넌트 9개를 지웠다
+// (죽은 GUID 4 + `m_Script: {fileID: 0}` 5). 그래서:
+//   scriptComponents 7019 -> 7016 (지운 4 + 프로젝트 증가 1)
+//   missingScript    601  -> 597 (지운 4)
+// 이 수치가 **더** 줄면 그때는 도구 문제로 볼 것.
 const BASELINE = {
-  scriptComponents: 7019,
+  scriptComponents: 7016,
   resolved: 864,
   unresolvedPackage: 5554,
   unresolvedInAssets: 0,
-  missingScript: 601,
+  missingScript: 597,
   fieldChecks: 864,
   baseChainIncomplete: 242,
   // ⚠️ §6 의 "낡은 키 가진 컴포넌트 19" 는 **확신 케이스**다 — 베이스 체인이 사용자

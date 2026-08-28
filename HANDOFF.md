@@ -260,10 +260,13 @@ node Tools/sweep-field-checks.js | tail -5     # §6 전수 집계 (약 32 s, Un
 ### 남은 것 — 전부 새 판단이 필요하다
 
 1. **여기서 닫는다.** 도구들은 모르는 것을 "모른다" 고 답한다
-2. **Missing Script 실제 정리** — §5 에 14개 전수 분류가 있다. **아직 아무것도 지우지 않았다.**
-   A(자기 코드 3개/132참조)는 의도된 삭제였는지 사람이 알아야 하고, B(서드파티 11개/32참조)는
-   재임포트로 되돌아올 수 있다. 정리한다면 `DefaultVolumeProfile.asset` 의 죽은 Volume 4개가 가장 안전하다.
-   **게임 레포를 건드리는 유일한 항목이다 — 사용자 확인 없이 하지 말 것**
+2. **Missing Script 정리 — 절반 했다(2026-08-28).** `DefaultVolumeProfile.asset` 의 고아
+   컴포넌트 **9개**를 지웠다(죽은 GUID 4 + `m_Script: {fileID: 0}` 5). 절차·검증·되돌리기와
+   **URP 17.3.0 템플릿 오염이라는 출처**는 §5. missing 14 -> 10 / 쌍 164 -> 160 / scriptless 5 -> 0.
+   ⚠️ **게임 레포에 커밋하지 않았다** — 워킹트리 변경으로 남아 있다(팀 레포 `feature/Boss23`).
+   남은 것: **A. 자기 코드 3개 / 132 참조**(`VeyTrace.…Occlusion` 세 클래스 — 필드값이 살아
+   있어 클래스를 복원하면 배선도 살아난다. "의도된 삭제였나" 는 사람이 결정할 것) ·
+   **B. 서드파티·테스트 잔여물 7개 / 28 참조**(재임포트로 되돌아올 수 있는 자리다)
 3. ~~**`effectByOperation` 의 남은 연산**~~ — **완료(2026-08-28, Unity 라이브).**
    `moveOrReimport`·`delete`·다중 MonoBehaviour 파일 셋 다 돌렸고 세 주장 모두 참이었다.
    관측은 `Tools/verify-effect-by-operation.md` 의 E4·E5·E6. 남은 것은 두 개뿐이다:
@@ -1302,6 +1305,54 @@ Unity 를 켜서 `effectByOperation` 실검증(E4~E6)을 하다가 픽스처가 
 그 파일은 그 프리팹들로 `EffectEntry` 를 만드는 에디터 오서링 스크립트다 —
 이름이 바뀌었는지, 폴더가 옮겨졌는지, 기능이 죽은 것인지는 **사람이 알아야 한다.**
 
+### 2026-08-28 — 정리 1건 실행: `DefaultVolumeProfile.asset` 의 고아 컴포넌트 9개
+
+**무엇을 지웠나.** 그 파일의 YAML 문서 29개 중 **9개**를 지웠다(20개 남았다 = 프로필 본체 1 +
+살아있는 컴포넌트 19). 지운 것은 **전부 고아**였다 — 프로필의 `components:` 목록이 참조하지
+않고, 프로젝트의 어떤 에셋도 그 fileID 를 참조하지 않는다.
+
+| 무엇 | 수 | 이름 |
+|---|---|---|
+| 죽은 GUID | 4 | `OutlineVolumeComponent` · `TestAnimationCurveVolumeComponent` · `OasisFogVolumeComponent` · `TestVolume` |
+| `m_Script: {fileID: 0}` | 5 | `CopyPasteTestComponent1~3` · `VolumeComponentSupportedEverywhere` · `VolumeComponentSupportedOnAnySRP` |
+
+**왜 있었나 — 우리 프로젝트가 만든 것이 아니다.** URP 17.3.0 패키지가 **템플릿 자체에**
+그 9개를 담아 배포한다: `Library/PackageCache/com.unity.render-pipelines.universal@…/Editor/Volume/DefaultVolumeProfile.asset`
+에 같은 fileID·같은 `m_EditorClassIdentifier`(`Unity.RenderPipelines.Core.Editor.Tests:…`)로
+byte 단위로 같은 것이 들어 있다. 그 템플릿은
+`URPDefaultVolumeProfileSetting.cs` 의 `AssetDatabase.CopyAsset` 으로 **파일째 복사**되므로
+서브에셋 쓰레기까지 따라온다. 이 프로젝트의 최초 커밋(`97c7b5a`)부터 있었다.
+**⚠️ Graphics Settings → URP Default Volume Profile → Reset 을 누르면 9개가 다시 들어온다.**
+
+**절차와 검증**(전부 실측):
+1. **Unity 를 껐다** — 에디터가 그 서브에셋들을 메모리에 들고 있으므로, 디스크 편집 후
+   Unity 가 먼저 쓰면 편집이 사라진다. 이것이 이 작업의 유일한 실질 위험이었다
+2. 문서 9개만 제거(`components:` 목록·프로필 본체·`.meta` 는 **건드리지 않았다**).
+   CRLF 보존 — `.gitattributes` 가 `*.asset text eol=lf` 인데 워킹트리는 CRLF 다
+3. 정적 검증: `git diff --numstat` **0 추가 / 188 삭제**, 25,021 -> 19,577 B,
+   문서 29 -> 20, `components` 19개 그대로, 목록의 fileID 전부 문서 있음, 남은 고아 0
+4. Unity 재기동 -> 임포트 오류·경고 **0**, 파일 해시 불변(Unity 가 재직렬화하지 않았다),
+   `UniversalRenderPipelineGlobalSettings.asset` 의 프로필 참조 유지
+5. 인덱스: missing **14 -> 10**, 영향 에셋 **134 -> 133**, 쌍 **164 -> 160**,
+   `scriptlessComponentCount` **5 -> 0**, 그 파일의 컴포넌트 문서 **29 -> 20**
+6. `sweep-field-checks` 기준선 둘을 내렸다(scriptComponents 7019->7016, missingScript 601->597) —
+   **감소가 개선인 유일한 경우**라 그 이유를 그 자리에 적었다
+
+**되돌리기**: `git -C C:/Unity/MainProject checkout -- Assets/99.Settings/DefaultVolumeProfile.asset`
+하나로 완전 복구된다(GUID·`.meta` 불변, `Library/` 는 gitignore).
+**게임 레포에는 커밋하지 않았다** — 워킹트리 변경으로 남겨 뒀다(팀 레포 `feature/Boss23`).
+
+**독립 검증 둘.** Codex 가 문서 29개를 전수 분류해 같은 9개를 짚고 "목록은 건드리지 말 것"을
+경고했다(목록에 죽은 fileID 가 하나도 없어서, 목록을 함께 편집하면 **살아있는 컴포넌트를
+잃는다**). 파견 에이전트가 URP 템플릿 오염이라는 출처와 "Unity 를 먼저 끄라"를 찾았다.
+
+**아직 남은 것**(이번에 손대지 않았다):
+- **A. 자기 코드 3개 / 132 참조** — `VeyTrace.Rendering.Occlusion.{OcclusionSection,ElevationLevel,ElevationStack}`.
+  필드값이 살아 있어 클래스를 복원하면 배선도 살아난다. **지우면 그 오소링이 사라진다** —
+  사람이 "의도된 삭제였나" 를 결정해야 한다
+- **B. 서드파티·테스트 잔여물 7개 / 28 참조** — `50.Art` 의 포탈 회전/오실레이터, HDRP 플러그인
+  메타가 남은 `.mat` 5건, MapGen 메시 캐시, INab 데모. 재임포트로 되돌아올 수 있는 자리다
+
 ### Missing Script
 
 `unity_find_missing_scripts` 가 찾은 것. **인덱스와 무관하게 처리 필요.**
@@ -1416,8 +1467,10 @@ curl -s -X POST http://127.0.0.1:3000/message \
 ```
 
 ### 회귀 기준 (2026-08-24 감사 후 재측정)
-- Missing Script: `coverage=full`, `missingScriptCount` **14**, `affectedAssetCount` **134**,
-  `assetGuidPairCount` **164**, 상위 3건 `referencingAssetCount` 합계 **132**
+- Missing Script: `coverage=full`, `missingScriptCount` **10**, `affectedAssetCount` **133**,
+  `assetGuidPairCount` **160**, 상위 3건 `referencingAssetCount` 합계 **132**.
+  ⚠️ 2026-08-28 에 14/134/164 에서 내려왔다 — **회귀가 아니라 정리다**(`DefaultVolumeProfile.asset`
+  의 고아 컴포넌트 9개 제거, §5). 그리고 `scriptlessComponentCount` 는 **0** 이어야 한다(그전 5)
   (필드 이름은 2026-08-28 에 바뀌었다 — 옛 이름은 `totalReferenceCount`/`referenceCount`. §4-(35).
   부분 커버리지에서는 missing 0 / `exists: null` 이 정상이다 — §4-12)
 - 메서드 줄 범위 — **`node Tools/probe-method-lines.js` 로 재실행한다**(프로브 8·9·10).
