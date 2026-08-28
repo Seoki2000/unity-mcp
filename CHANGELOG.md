@@ -1,5 +1,10 @@
 # Changelog
 
+> **이 파일은 업스트림 `2.2.0`(2024-12-12)까지만 기록한다 — 이 포크의 변경은 여기 없다.**
+> 포크(`Seoki2000/unity-mcp`, 브랜치 `optimized`, 현재 `2.3.0-dev.0.0.7`)의 변경 기록은
+> `README.md` / `README_ko.md` 의 "Fork dev build" 절과 `HANDOFF.md` 에 있다.
+> 마지막 항목이 2.2.0 이라는 것을 "최신 릴리스가 2.2.0" 으로 읽지 말 것.
+
 All notable changes to this project will be documented in this file.
 
 ## [2.2.0] - 2024-12-12

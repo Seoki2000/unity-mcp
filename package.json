@@ -1,6 +1,6 @@
 {
   "name": "com.community.unity-mcp",
-  "version": "2.3.0-dev.0.0.6",
+  "version": "2.3.0-dev.0.0.7",
   "displayName": "Unity MCP Server",
   "description": "Model Context Protocol (MCP) server for Unity. Enables AI agents to query scenes, assets, and execute actions in the Unity Editor.",
   "unity": "2021.3",

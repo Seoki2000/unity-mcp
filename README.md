@@ -7,13 +7,38 @@
 *Read this in other languages: [한국어](README_ko.md)*
 A **Model Context Protocol (MCP)** server for Unity that enables AI agents to **query and control** the Unity Editor. This local-optimized version is enhanced with additional tools for Behavior Trees, Window Management, and advanced GameObject/Hierarchy manipulation.
 
-## Fork dev build — dev-0.0.6
+## Fork dev build — dev-0.0.7
 
 This fork (`Seoki2000/unity-mcp`, branch `optimized`) diverges from upstream. Numbers below
 are measured against a live Unity editor, not estimated. Full record in Korean:
-[README_ko.md](README_ko.md#포크-개발-버전--dev-001).
+[README_ko.md](README_ko.md#포크-개발-버전--dev-007).
 
-Package version: `2.3.0-dev.0.0.6` · baseline commit: `5331a34`
+Package version: `2.3.0-dev.0.0.7` · baseline commit: `5331a34`
+
+**dev-0.0.7 (2026-08-28) — correctness, not features.** No tool was added; `tools/list` is
+byte-identical. What changed is what the answers say:
+
+- **Method line ranges were wrong for 27.4% of methods** and 126 methods carried *negative*
+  line numbers. The Portable PDB sequence-point decoder used one flag for two things, so the
+  absolute line after a hidden sequence point was read as a signed delta. A full-population
+  cross-check now runs in the probe suite: 5,313/5,313 declarations match disk, zero
+  overlapping ranges, zero negatives; an independent .NET reference reader agrees on all
+  5,960 methods. `endLine` is now the last sequence point's **end** line (it was the start
+  line, cutting up to 22 lines off 133 methods), and methods of a partial class no longer
+  leak into the other file's view.
+- **`unity_explain_compile_errors` says what the line is**, not only which method follows it:
+  `lineKind` (file-level / type or member attribute / type declaration / field declaration /
+  in-method-body / unknown) covers 86% of the previously vague `gap` lines, and a field
+  declaration is joined to the real field with its decoded type. A file-level line is no
+  longer attributed to a method at all.
+- **Two count fields were renamed to say what they count**: `totalReferenceCount` →
+  `assetGuidPairCount`, per-row `referenceCount` → `referencingAssetCount`.
+- **`danglingLoads`** — load calls whose path folds to a string where no asset lives. The
+  compiler and the console are silent about these; measured here: 2 real ones. Moving an
+  asset was verified live to leave exactly this trace and nothing else.
+- **A type with no PDB document** (a data-only component) no longer reports "nothing is
+  attached" in `unity_impact_analysis`; it falls back to the file-name convention and says so.
+- Index cache version 12 → 16, so old caches are discarded rather than serving the old answers.
 
 **Added since the previously pinned `2ea969e`:** path-escape guard and session-token auth;
 tool annotations, pagination and response caps; an out-of-process project index (reverse
@@ -31,7 +56,8 @@ repo; a bridge launcher that resolves `PackageCache` at run time. Tools: **67 �
 | dev-0.0.2 | 39,669 | 82 | 483.8 |
 | dev-0.0.4 | 40,905 | 83 | 492.8 |
 | dev-0.0.5 | 42,142 | 84 | 501.7 |
-| **dev-0.0.6** | **43,368** | **85** | **510.2** |
+| dev-0.0.6 | 43,368 | 85 | 510.2 |
+| **dev-0.0.7** | **43,368** | **85** | **510.2** (tool definitions untouched — only response fields grew) |
 
 Bytes are the `tools` **array** serialized as UTF-8. The full JSON-RPC response line is 43,412 B and
 the on-disk `tools-cache.json` is 43,415 B (it wraps the array with `savedAt`).
@@ -60,7 +86,8 @@ scene or asset and returns each component with its field values, resolving every
 asset path. Reading `.cs` cannot answer this (the values live in the asset) and reading the
 YAML cannot either (the asset stores a GUID, not a type name). Serialized keys are checked
 against the compiled type, so keys left behind by renamed fields are visible. Measured over
-all 1,144 text assets (181 MB, 69,891 documents): 0 unparsed lines, and every GUID the
+all 1,144 text assets as counted then (181 MB, 69,891 documents; the project has since grown
+to 1,171 - quote the count with its date): 0 unparsed lines, and every GUID the
 independent regex scanner finds also appears in the parsed value tree.
 
 **Accuracy fixes in dev-0.0.2.** Assets reported *zero* references in three different ways.
@@ -138,7 +165,7 @@ const-path loads from code, `ProjectSettings` and build-scene membership, and at
 points. No total is computed, because the axes fail differently: the compiler catches a code
 caller, an Inspector wiring breaks silently, and a type-name string breaks with no diagnostic at
 all. `unknown` ships in every response — 44 unresolved dynamic load sites, no implements-list for
-53 interfaces, 1,864 edges leaving the index, 681 unread binaries, name-key overload merging, 123 colliding
+53 interfaces, 1,864 edges leaving the index, 681 unread binaries, name-key overload merging, 123 duplicate type records under 29 colliding
 nested type names, and disk-only state — because zero on every axis is not proof. Transitive depth
 is explicit (`depth`, default 1; measured caller fan-out on a 120-method sample: level 1 median 1 /
 p90 3 / max 59, level 2 median 1 / p90 5 / max 76). Cost: `tools/list` 40,905 -> 42,142 B, warm
@@ -161,7 +188,9 @@ consumer gave it one within a day.
 
 **Known limits:** references assembled at run time (`Resources.Load(dir + name)`, Addressables
 addresses) stay invisible — 44 such call sites here, and a zero result reports that count; no
-true incremental index refresh — a stale index is rebuilt whole (4.8 s cold), not diffed. Since
+true incremental index refresh — a stale index is rebuilt whole, not diffed (cold build
+5.7-6.9 s with the editor closed, 4.7 s with it idle - state the editor state when you quote
+this number, the two conditions differ by ~30%). Since
 dev-0.0.6 you no longer need to call `unity_index_rebuild` by hand: `ensureIndex` revalidates on
 every call (assembly signature 11-18 ms each call, asset fingerprint throttled to 10 s);
 `assetGuidPairCount` on `unity_find_missing_scripts` counts (asset, GUID) pairs, not raw
@@ -198,7 +227,7 @@ MCP is an open standard by Anthropic that allows AI systems to access external t
    ```
 
    This is a fork of [usmanbutt-dev/unity-mcp](https://github.com/usmanbutt-dev/unity-mcp).
-   `optimized` is this fork's line — see [Fork dev build](#fork-dev-build--dev-001) for what differs.
+   `optimized` is this fork's line — see [Fork dev build](#fork-dev-build--dev-007) for what differs.
    Projects consuming this package should pin a commit SHA rather than the branch name.
 
 ## Quick Start

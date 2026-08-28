@@ -12,7 +12,7 @@ node missing-scripts.js   C:/Unity/MainProject
 
 | 항목 | 값 |
 |---|---|
-| 파일 목록 수집 | 35 ms (.meta 2039 / YAML 783) |
+| 파일 목록 수집 | 35 ms (.meta 2,037 / YAML 783) |
 | .meta GUID 인덱스 | 211 ms |
 | YAML 역참조 인덱스 | 173 ms (115.4 MB) |
 | **콜드 빌드 총계** | **~420 ms**, 힙 22.3 MB |
