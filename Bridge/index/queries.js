@@ -179,6 +179,86 @@ function resolveScriptType(index, guid) {
 }
 
 /**
+ * 타입 해석에 **실패했을 때만**, 에셋이 스스로 적어 둔 타입 이름을 꺼낸다.
+ *
+ * Unity 는 MonoBehaviour 문서에 `m_EditorClassIdentifier: <어셈블리>::<네임스페이스.타입>` 을
+ * 적어 둔다. 이 값은 이미 응답의 `editorClassIdentifier` 로 나가고 있었다 —
+ * 승격은 그것을 **답 자리로 올리는 것**이지 새로 계산하는 것이 아니다(캐시 0 B, 빌드 0 ms).
+ *
+ * ⚠️ 세 가지를 지킨다.
+ *   1. **검증된 타입이 이긴다.** join 이 타입을 냈으면 승격하지 않는다. 낡은 ECID 로
+ *      실제 컴파일되는 타입을 덮으면 §4 의 URP `Volume.cs` 오답과 같은 실패가 된다
+ *      (실측: 이 프로젝트에 ECID 가 컴파일 타입과 다른 컴포넌트가 11건 있다).
+ *   2. **`script.type` 에 넣지 않는다.** 그 슬롯은 "컴파일된 코드로 확인했다" 는 뜻이다.
+ *      `typeByFullName`/`typesByShortName` 에도 절대 합치지 않는다 — 짧은 이름 유일성이
+ *      깨지고 fullName 충돌이 3,560건이다.
+ *   3. **검증 불가임을 값 안에 싣는다**(`verified: false`). 부르는 쪽이 note 를 안 읽어도
+ *      구분할 수 있어야 한다.
+ *
+ * 없거나 빈 문자열이면 null 을 낸다 — **이름을 지어내지 않는다.** 실측(2026-08-29):
+ * 붙어 있는 미해석 컴포넌트 1,400 중 310 은 ECID 가 없다. 그 310 은 계속 모른다고 답한다.
+ */
+const ECID_TYPE_RE = /^[A-Za-z_][A-Za-z0-9_.`+]*$/;
+
+/**
+ * `<어셈블리>::<네임스페이스.타입>` 을 **엄격하게** 읽는다. 형태가 아니면 null 이다.
+ *
+ * 느슨하게 읽으면 안 되는 이유 — 독립 검증(2026-08-29)이 짚었다:
+ *   `A::B::C` 를 마지막 `::` 로 쪼개면 어셈블리 `A::B` 라는 **없는 짝**을 만들어 낸다.
+ *   `Assembly-CSharp::not a type` 은 타입 이름이 아닌데 타입 이름 자리로 올라간다.
+ * 직렬화가 깨진 값을 "에셋이 기록한 타입" 으로 제시하는 것이 이 도구에서 최악이다.
+ * 못 읽으면 승격하지 않는다 — **원본은 `editorClassIdentifier` 로 그대로 나가므로
+ * 정보가 사라지지는 않는다.**
+ *
+ * 실측(2026-08-29, 전수 1,726건): 전부 `::` 정확히 1개인 표준형이다. 규칙을 좁혀도
+ * 잃는 것이 **0** 이고, `::` 만 있는 값 2건은 전부터 승격 대상이 아니었다.
+ */
+function parseEcid(raw) {
+  if (typeof raw !== 'string') return null;
+  const parts = raw.trim().split('::');
+  if (parts.length !== 2) return null;
+  const assembly = parts[0].trim();
+  const fullName = parts[1].trim();
+  if (!assembly || !ECID_TYPE_RE.test(fullName)) return null;
+  return { assembly, fullName };
+}
+
+function promoteFromAsset(body, join, index) {
+  if (join && join.type) return null;
+  const parsed = parseEcid(body && body.m_EditorClassIdentifier);
+  if (!parsed) return null;
+
+  const out = {
+    fullName: parsed.fullName,
+    assembly: parsed.assembly,
+    source: 'm_EditorClassIdentifier',
+    verified: false,
+  };
+  if (!index) return out;
+
+  // ⚠️ 사유는 `script.exists` 로 정하면 안 된다. exists 는 `.meta` 가 있느냐일 뿐이라,
+  //    **Assets 안에 있는데 해석이 안 된 스크립트**(컴파일 실패·어셈블리 미빌드·PDB 매핑
+  //    없음·파일명과 타입명 불일치)까지 "패키지라서" 로 말하게 된다. 독립 검증이 짚었다.
+  //    지금 이 프로젝트에는 그 경우가 0 건이지만, 0 이 깨지는 날이 바로 진단이 필요한
+  //    날이고 그때 도구가 엉뚱한 곳을 가리키면 안 된다.
+  const guid = body.m_Script && body.m_Script.guid;
+  const csPath = guid ? index.guidToPath.get(guid) : null;
+  out.unverifiedReason = !csPath
+    ? (index.guidCoverage === 'full' ? 'script-not-in-project' : 'coverage-partial')
+    : (/^Assets\//i.test(csPath) ? 'unresolved-in-assets' : 'outside-indexed-assemblies');
+
+  // GUID 가 아무것도 안 가리킨다는 것은 **이 참조가 끊겼다**는 뜻이지 "그 이름의 타입이
+  // 오늘 컴파일되지 않는다" 는 뜻이 아니다. 스크립트를 지웠다 다시 만들면 `.meta` GUID 가
+  // 바뀌어 정확히 이 상태가 된다. 맵 조회 한 번이면 둘을 가를 수 있다 — 그리고 갈리면
+  // 처방이 완전히 다르다(복원이 아니라 컴포넌트에 스크립트를 다시 지정하는 것).
+  const sym = index.symbols;
+  if (sym && sym.typeByFullName) {
+    out.typeWithThisNameCompiles = sym.typeByFullName.has(parsed.fullName);
+  }
+  return out;
+}
+
+/**
  * 이 타입을 **이름 문자열로** 참조하는 에셋(Behavior 그래프 노드 등).
  * 프리팹에 붙는 것도 아니고 코드가 부르는 것도 아니라, 이 축이 없으면 통째로 안 보인다.
  */
@@ -1191,6 +1271,14 @@ function getAssetComponents(index, args) {
         typeCache.set(msg.guid, tn);
       }
       if (tn) label = tn;
+      else {
+        // 해석이 안 되면 에셋이 적어 둔 이름으로 답한다. 같은 응답 안에서 이 문서가
+        // 컴포넌트 행으로는 'OcclusionSection', 참조 라벨로는 'MonoBehaviour' 로 보이면
+        // 읽는 쪽이 두 개의 다른 것으로 읽는다. 단 **검증할 수 없으므로 그렇게 말한다** —
+        // 라벨만 보고 컴파일된 타입으로 읽으면 안 된다.
+        const pr = promoteFromAsset(r.body, null, index);
+        if (pr) label = pr.fullName + ' (unverified)';
+      }
     }
 
     localDocs.set(String(d.fileID), { label, className: r.className, name, body: r.body || {} });
@@ -1263,12 +1351,33 @@ function getAssetComponents(index, args) {
             'type.fullName is what actually compiles now.';
         }
       }
+
+      // 해석에 실패했을 때만 승격한다. 값은 위 editorClassIdentifier 에 이미 있었다 —
+      // 바뀌는 것은 **어디에 싣느냐**다. script.type 은 건드리지 않는다.
+      // 왜 검증할 수 없는지는 사정마다 다르고 **처방도 다르다.** 뭉쳐서 말하면
+      // "스크립트가 사라졌다" 와 "우리가 안 보고 있다" 가 같은 문장으로 나간다.
+      // 다만 설명문을 행마다 실으면 안 된다 — 처음에 그렇게 했더니 승격 필드가
+      // 응답의 15.5% 를 먹었다(Volume Profile 7행에 같은 문단이 7번). 행에는 사유
+      // 코드만 두고 문단은 응답에 한 번 싣는다.
+      const promoted = promoteFromAsset(p.body, join, index);
+      if (promoted) script.typeNameFromAsset = promoted;
     }
 
-    const displayName = script && script.type ? script.type.fullName : p.className;
+    // 이 행이 무엇인가에 대한 **한 개의 답 자리**. 없으면 부르는 쪽이 className 과
+    // script.type 과 editorClassIdentifier 를 스스로 조합해야 하고, 그 조합 규칙이
+    // 부르는 쪽마다 달라진다. 우선순위: 검증된 타입 > 에셋이 적은 이름 > Unity 클래스.
+    const displayName = script && script.type ? script.type.fullName
+      : (script && script.typeNameFromAsset ? script.typeNameFromAsset.fullName : p.className);
 
     if (wantFileID && String(p.doc.fileID) !== wantFileID) continue;
-    if (wantComponent && !displayName.toLowerCase().includes(wantComponent)) continue;
+    // displayName 과 className **둘 다** 본다. displayName 만 보면 승격된 행이
+    // `component: "MonoBehaviour"` 에서 조용히 사라진다 — 하필 새로 이름을 얻은 1,090 행이
+    // 통째로 빠지는 것이라, 열거하려던 사람이 "없다" 를 답으로 받는다(§4-(21) 의 거짓 0 형태).
+    // 둘 다 보면 **행이 숨는 일이 없다.** 대신 `component: "MonoBehaviour"` 는 이제 해석된
+    // 스크립트 컴포넌트까지 돌려준다 — 넓어지는 쪽이라 숨기는 쪽보다 안전하다.
+    if (wantComponent &&
+        !displayName.toLowerCase().includes(wantComponent) &&
+        !String(p.className).toLowerCase().includes(wantComponent)) continue;
     if (wantGameObject) {
       const n = (owner && owner.name) || (p.className === 'GameObject' ? p.name : '');
       if (!n || !n.toLowerCase().includes(wantGameObject)) continue;
@@ -1295,6 +1404,7 @@ function getAssetComponents(index, args) {
       fileID: String(p.doc.fileID),
       classId: p.doc.classId,
       className: p.className,
+      displayName,
       ...(p.doc.stripped ? { stripped: true } : {}),
       gameObject: owner,
       script,
@@ -1318,6 +1428,36 @@ function getAssetComponents(index, args) {
 
   const page = pageOf(rows, args.offset, args.maxResults > 0 ? args.maxResults : 25);
 
+  // 돌려주는 페이지 안에서만 센다. 전체 rows 로 세면 이 응답에 없는 행까지 세어
+  // "N 건이 검증 불가" 가 응답과 안 맞는다.
+  const promotedRows = page.items.filter(r => r.script && r.script.typeNameFromAsset);
+  const unverifiedTypeNameCount = promotedRows.length;
+
+  // 사유별 설명. **이 응답에 실제로 나온 사유만** 싣는다.
+  // 문구는 짧게 유지한다 — 설명이 길수록 응답이 커지고, 이 블록은 승격이 있는 모든
+  // 응답에 붙는다. 실측: 처음 문구로는 승격 필드가 응답의 15.5%, 조인 뒤 11.6%, 지금 8.4%.
+  const REASON_NOTES = {
+    'script-not-in-project':
+      'The GUID this component points to matches no script in the project, so the reference itself is broken. ' +
+      'The name is what Unity recorded when the asset was last saved, and is stale if the class was renamed ' +
+      'before it went away. See typeWithThisNameCompiles for whether a type by that name still builds.',
+    'outside-indexed-assemblies':
+      'The script exists but sits outside the indexed user assemblies (a package). A coverage limit here, not a ' +
+      'defect in the asset.',
+    'unresolved-in-assets':
+      'The script is in Assets but no compiled type maps to it: it did not compile, its assembly was not built, ' +
+      'or its type name differs from its file name. Fix that before trusting anything here — the index is ' +
+      'describing the last successful build.',
+    'coverage-partial':
+      'GUID coverage is partial (Assets and Packages only). Rebuild with full coverage before concluding the ' +
+      'script is gone.',
+  };
+  const reasonCounts = new Map();
+  for (const r of promotedRows) {
+    const k = r.script.typeNameFromAsset.unverifiedReason;
+    reasonCounts.set(k, (reasonCounts.get(k) || 0) + 1);
+  }
+
   return {
     asset: asPath,
     guid: guid || index.pathToGuid.get(asPath) || null,
@@ -1336,6 +1476,29 @@ function getAssetComponents(index, args) {
     // 파서가 못 읽은 줄. 0 이 아니면 이 응답의 값은 불완전하다 — 세기만 하고 감추지 않는다.
     unparsedLines: unparsedTotal,
     ...(unparsedTotal ? { unparsedSamples } : {}),
+    // 승격이 하나도 없으면 이 블록은 통째로 안 나간다 — 안 쓰는 응답에 바이트를 붙이지 않는다.
+    ...(unverifiedTypeNameCount ? {
+      unverifiedTypeNames: {
+        count: unverifiedTypeNameCount,
+        note:
+          unverifiedTypeNameCount + ' component(s) below could not be resolved to a compiled type, so their ' +
+          'displayName is the name the asset itself recorded (m_EditorClassIdentifier), repeated in ' +
+          'script.typeNameFromAsset with verified:false. That is what Unity wrote when the asset was last ' +
+          'saved — not evidence the type compiles today. Local references to them read "<name> (unverified)".',
+        byReason: [...reasonCounts.entries()].map(([reason, count]) => ({
+          reason, count, note: REASON_NOTES[reason],
+        })),
+        // 처방이 완전히 달라지는 경우라 따로 말한다. 해당 행이 없으면 안 나간다.
+        ...(promotedRows.some(r => r.script.typeNameFromAsset.typeWithThisNameCompiles &&
+                                   r.script.typeNameFromAsset.unverifiedReason === 'script-not-in-project')
+          ? { staleGuidNote:
+              'Some rows have typeWithThisNameCompiles:true while their GUID matches no script. A type with ' +
+              'that exact name does build today, so the class is not gone — the component points at an old ' +
+              'GUID (typically the script was deleted and re-created, giving its .meta a new one). Reassign ' +
+              'the script on the component; do not restore anything.' }
+          : {}),
+      },
+    } : {}),
     note: 'Values are read from the serialized asset, not from the Editor, so this reflects what is on disk ' +
           '(unsaved Editor state is not visible). Object references carry assetPath (cross-asset) or localRef ' +
           '(same file) where they resolve. Unity writes booleans as 1/0.',
@@ -1344,7 +1507,9 @@ function getAssetComponents(index, args) {
 
 // _checkFields 는 전수 측정용 시임이다. 도구 응답과 **같은 코드**로 재야 수치가 의미를 갖는다
 // (도구를 통해 재면 파일당 500개 페이지 상한에 걸려 과소 집계된다 — 실제로 한 번 그랬다).
-module.exports = { _checkFields: checkFields,
+// _promoteFromAsset 도 같은 이유의 시임이다 — 전수 프로브가 도구와 **같은 코드**로
+// 승격 대상을 세야 "1,213 건" 이 응답과 같은 것을 가리킨다.
+module.exports = { _checkFields: checkFields, _promoteFromAsset: promoteFromAsset,
                    findReferences, findComponentUsages, findMissingScripts, getTypeSymbols,
                    findCallers, findCallees, status, resolveGuid, resolveScriptType,
                    getAssetComponents };

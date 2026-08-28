@@ -574,7 +574,7 @@ function toolDefinitions() {
     },
     {
       name: 'unity_get_asset_components',
-      description: 'Read the components of a prefab/scene/asset with their serialized field values, resolving each m_Script GUID to the compiled type name. Answers "what is attached here and what is each field set to" — which reading .cs cannot (values live in the asset) and reading the YAML alone cannot (the asset stores a GUID, not a type name). Object references resolve to asset paths; serialized keys are checked against the compiled type, so stale keys left by renamed fields are visible.',
+      description: 'Read the components of a prefab/scene/asset with their serialized field values, resolving each m_Script GUID to the compiled type name. Answers "what is attached here and what is each field set to" — which reading .cs cannot (values live in the asset) and reading the YAML alone cannot (the asset stores a GUID, not a type name). Object references resolve to asset paths; serialized keys are checked against the compiled type, so stale keys left by renamed fields are visible. When a GUID resolves to no compiled type — for any reason, which the response names — displayName falls back to the type name the asset itself recorded, flagged verified:false, instead of answering "MonoBehaviour". The component filter matches either name, so it never hides a row.',
       inputSchema: {
         type: 'object',
         properties: {
