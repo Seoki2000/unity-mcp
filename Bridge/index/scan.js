@@ -57,6 +57,9 @@ const ANY_GUID_RE = /guid:\s*([0-9a-f]{32})/g;
 // (실측: 분리 515+2,000 ms → 합치면 1,957 ms).
 const GUID_SCAN_RE = /guid:\s*([0-9a-f]{32})|([0-9a-f]{32})/g;
 const SCRIPT_BLOCK_RE = /m_Script:\s*\{fileID:\s*(\d+),\s*guid:\s*([0-9a-f]{32})[^}]*\}/g;
+// `m_Script: {fileID: 0}` — GUID 가 아예 없는 형태. 위 정규식은 GUID 를 요구하므로
+// 이 형태를 못 본다. 되살릴 GUID 가 없다는 점에서 Missing Script 와 다른 실패다.
+const SCRIPTLESS_RE = /m_Script:\s*\{fileID:\s*0\s*\}/g;
 
 /** 프로젝트 루트 기준 슬래시 경로로 정규화한다. */
 function rel(root, p) {
@@ -389,6 +392,9 @@ function buildYamlIndex(root, yamlFiles, meta) {
   let bytesParsed = 0;
   let filesFailed = 0;
   let bareEdges = 0;
+  // GUID 가 아예 없는 컴포넌트(`m_Script: {fileID: 0}`)의 수와 그런 파일들.
+  let scriptlessCount = 0;
+  const scriptlessFiles = [];
 
   for (const y of yamlFiles) {
     let text;
@@ -441,9 +447,21 @@ function buildYamlIndex(root, yamlFiles, meta) {
       if (!set) scriptRefs.set(m[2], set = new Set());
       set.add(assetPath);
     }
+
+    // **GUID 가 아예 없는 컴포넌트** — `m_Script: {fileID: 0}`.
+    // 위 정규식은 GUID 가 있어야 매치되므로 이 형태는 어디에도 안 세어졌다.
+    // Missing Script 와 실패 양상이 다르다: 되살릴 GUID 자체가 없고, 힌트는
+    // `m_EditorClassIdentifier` 뿐이다. 실측(2026-08-28): 이 프로젝트에 5건,
+    // 전부 `DefaultVolumeProfile.asset` 의 URP 코어 **테스트 패키지** 타입이었다.
+    // 세지 않으면 "Missing Script 14건" 이 전부인 것처럼 읽힌다.
+    SCRIPTLESS_RE.lastIndex = 0;
+    let sc = 0;
+    while (SCRIPTLESS_RE.exec(text) !== null) sc++;
+    if (sc) { scriptlessCount += sc; scriptlessFiles.push({ file: assetPath, count: sc }); }
   }
 
-  return { refs, scriptRefs, bytesParsed, filesFailed, bareEdges, eventFiles, typeRefFiles };
+  return { refs, scriptRefs, bytesParsed, filesFailed, bareEdges, eventFiles, typeRefFiles,
+           scriptlessCount, scriptlessFiles };
 }
 
 /**
@@ -643,6 +661,8 @@ function buildIndex(root, opts = {}) {
     guidCoverage: opts.includePackageCache ? 'full' : 'assets',
     // 질의가 0 을 답할 때 "안 본 확장자였나" 를 판단할 근거.
     yamlExtensions: [...YAML_EXT].sort(),
+    // GUID 없는 컴포넌트가 있는 파일들(파일, 개수). 개수만으로는 어디인지 알 수 없다.
+    scriptlessFiles: yaml.scriptlessFiles.slice(0, 50),
     // 가리키는 것이 없는 로드 경로 (파일, 경로). 세기만 하면 어느 파일인지 알 수 없다.
     danglingLoads: other.danglingLoads || [],
     danglingLoadsOmitted: other.danglingLoadsOmitted || 0,
@@ -676,6 +696,9 @@ function buildIndex(root, opts = {}) {
       otherBinarySkipped: other.binaryFiles,
       otherLargeSkipped: other.largeFiles,
       otherRefEdges: other.edges,
+      // GUID 가 아예 없는 컴포넌트(`m_Script: {fileID: 0}`). Missing Script 와 다른 실패다.
+      scriptlessComponents: yaml.scriptlessCount,
+      scriptlessComponentFiles: yaml.scriptlessFiles.length,
       // 코드가 경로/키로 부르는 에셋. 리터럴만 해석된다 — 조립된 경로는 dynamicLoadSites 로 센다.
       pathLoadEdges: other.pathLoadEdges,
       pathLoadResolved: other.pathLoadResolved,

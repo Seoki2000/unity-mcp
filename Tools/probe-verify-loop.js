@@ -139,5 +139,28 @@ check('상수로 조립된 로드 경로가 해석된다', () => {
            detail: 'pathLoads=' + JSON.stringify(loads) };
 });
 
+// 10. ⭐ GUID 가 아예 없는 컴포넌트(`m_Script: {fileID: 0}`)를 개수로라도 답해야 한다.
+//     Missing Script 조인은 GUID 를 찾으므로 이 형태를 **원리적으로** 못 본다.
+//     2026-08-28 에 정리 작업을 하다가 발견했다: `DefaultVolumeProfile.asset` 에 5건 있는데
+//     도구는 "Missing Script 14건" 만 말하고 있었다.
+//     기대값을 박지 않는다 — 소스를 직접 다시 세서 도구와 맞춘다(다른 경로로 구한 답, §4-(31)).
+check('GUID 없는 컴포넌트를 세어 답한다 (독립 재집계와 일치)', () => {
+  const fs2 = require('fs');
+  const idx2 = tools.ensureIndex(PORT, false, false, true);
+  const RE = /m_Script:\s*\{fileID:\s*0\s*\}/g;
+  let mine = 0;
+  for (const p of idx2.guidToPath.values()) {
+    if (!/[.](asset|prefab|unity|mat|controller|playable|vfx)$/i.test(p)) continue;
+    let text;
+    try { text = fs2.readFileSync('C:/Unity/MainProject/' + p, 'latin1'); } catch { continue; }
+    RE.lastIndex = 0;
+    while (RE.exec(text) !== null) mine++;
+  }
+  const d = JSON.parse(tools.callLocalTool('unity_find_missing_scripts', {}, PORT).content[0].text);
+  const told = d.scriptlessComponentCount || 0;
+  // 0 이면 이 프로젝트에 그 형태가 없다는 뜻이다 — 그때도 두 수가 같아야 한다.
+  return { ok: told === mine, detail: `도구 ${told} vs 독립 재집계 ${mine}` };
+});
+
 console.log(`\n${pass}/${pass + fail}`);
 process.exit(fail === 0 ? 0 : 1);

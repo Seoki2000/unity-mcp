@@ -412,9 +412,23 @@ function findMissingScripts(index, args) {
                'those are normal and excluded from the counts above.');
   }
 
+  // GUID 가 아예 없는 컴포넌트는 위 조인에 **원리적으로** 안 걸린다(찾을 GUID 가 없다).
+  // 세지 않으면 "Missing Script 14건" 이 깨진 컴포넌트의 전부인 것처럼 읽힌다.
+  const scriptless = (index.stats && index.stats.scriptlessComponents) || 0;
+  if (scriptless) {
+    notes.push(`${scriptless} component(s) have no script reference at all (m_Script: {fileID: 0}), ` +
+               'which this GUID join cannot see - they are counted separately as ' +
+               'scriptlessComponentCount. There is no GUID to restore for those; the only hint is ' +
+               'm_EditorClassIdentifier, which unity_get_asset_components shows.');
+  }
+
   return {
     guidCoverage: index.guidCoverage,
     missingScriptCount: rows.length,
+    ...(scriptless ? {
+      scriptlessComponentCount: scriptless,
+      scriptlessComponentFiles: (index.scriptlessFiles || []).slice(0, 10),
+    } : {}),
     affectedAssetCount: affected.size,
     assetGuidPairCount: totalRefs,
     returnedCount: page.items.length,

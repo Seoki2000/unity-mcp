@@ -159,7 +159,9 @@ function cachePath(root) {
 // 17: 상수-상수 로드 경로를 접게 되면서 **참조 엣지가 하나 늘었다**(6,305 -> 6,306).
 //     구 캐시는 그 엣지가 없는 그래프를 담고 있으므로 버려야 한다 — 지문은 디스크 상태만
 //     보므로 코드가 바뀐 것은 못 잡는다(§4-(18)).
-const CACHE_VERSION = 17;
+// 18: GUID 가 아예 없는 컴포넌트(`m_Script: {fileID: 0}`) 집계. 구 캐시에는 없어
+//     캐시로 뜬 세션에서 그 수가 조용히 0 이 된다.
+const CACHE_VERSION = 18;
 
 function saveCache(index) {
   try {
@@ -174,6 +176,7 @@ function saveCache(index) {
       stats: index.stats,
       danglingLoads: index.danglingLoads || [],
       danglingLoadsOmitted: index.danglingLoadsOmitted || 0,
+      scriptlessFiles: index.scriptlessFiles || [],
       guidToPath: [...index.guidToPath],
       refs: [...index.refs].map(([g, s]) => [g, [...s]]),
       scriptRefs: [...index.scriptRefs].map(([g, s]) => [g, [...s]]),
@@ -340,6 +343,7 @@ function loadCache(root) {
       // 질문이 캐시 세션에서만 조용히 빈 답을 낸다(§4-(24)-2 와 같은 형태).
       danglingLoads: raw.danglingLoads || [],
       danglingLoadsOmitted: raw.danglingLoadsOmitted || 0,
+      scriptlessFiles: raw.scriptlessFiles || [],
       // 지문을 복원해 둔다. 안 하면 캐시에서 올린 인덱스에는 fingerprint 가 없고,
       // 그 상태로 다시 저장될 때(예: PackageCache 병합 후) fingerprint: null 이 기록된다.
       // 다음 세션은 "지문 없는 구 캐시" 로 보고 매번 전체 재빌드를 한다 —
