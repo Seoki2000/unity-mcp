@@ -198,6 +198,10 @@ function looksLikeDeclarationOf(s, name) {
     // 1c. 이름이 `=` **뒤**에 있으면 대입의 우변이다. 생성자의 `this.slot = slot;` 이
     //     그렇고, 독립 검증 3차의 거짓 양성 상당수가 이 형태였다.
     if (before.includes('=')) continue;
+    // 1d. `new X { field = ... }` 는 **object initializer** 다 — 필드 선언이 아니다.
+    //     생성자 범위(정적 필드의 배열 초기화자 등) 안에서 이 형태가 많이 나온다.
+    //     독립 검증 3차가 `BossDataSO.cs:106` 으로 짚었다.
+    if (before.includes('{') || /\bnew\b/.test(before)) continue;
     const identsBefore = before.match(IDENT_RE) || [];
     if (identsBefore.length === 0) continue;                  // 2
     const after = s.slice(at + name.length).trimStart();       // 3
@@ -229,11 +233,40 @@ function stripLeadingAttributes(s) {
  * 두 자리에서 같은 규칙을 써야 한다 — 필드 선언 줄과 **속성+필드가 같은 줄**.
  * 한쪽만 고치는 것이 이 저장소가 반복해 온 실수다(§4-(21)).
  */
+/**
+ * 이 파일이 선언한 타입들 + **그 안의 중첩 타입들**.
+ *
+ * 중첩 타입은 메서드가 없으면 PDB 문서가 없어서 `typesBySourceFile` 에 아예 안 들어온다
+ * (`EffectManager` 안의 `SpawnedPart` 가 그렇다). 그래서 중첩 타입의 필드 선언 줄이
+ * `unknown` 으로 떨어졌다 — 독립 검증 3차가 가려진 190줄 중 166줄이 그것이라고 짚었다.
+ * `typeByQualifiedName` 은 `Outer/Inner` 로 갖고 있으므로 선언 타입 접두사로 찾아 붙인다.
+ */
+function typeInfosForFile(typeNames, sym) {
+  const out = [];
+  const seen = new Set();
+  const push = (info) => { if (info && !seen.has(info)) { seen.add(info); out.push(info); } };
+  for (const fn of (typeNames || [])) push(sym.typeByFullName.get(fn));
+  if (sym.typeByQualifiedName) {
+    if (!sym.__nestedByOuter) {
+      const m = new Map();
+      for (const [q, info] of sym.typeByQualifiedName) {
+        const ix = q.indexOf('/');
+        if (ix < 0) continue;
+        const outer = q.slice(0, ix);
+        if (!m.has(outer)) m.set(outer, []);
+        m.get(outer).push(info);
+      }
+      sym.__nestedByOuter = m;
+    }
+    for (const fn of (typeNames || [])) for (const info of (sym.__nestedByOuter.get(fn) || [])) push(info);
+  }
+  return out;
+}
+
 function matchFieldOnLine(s, typeNames, sym) {
   if (!s || !sym || !sym.typeByFullName) return null;
   const names = new Set();
-  for (const fn of (typeNames || [])) {
-    const info = sym.typeByFullName.get(fn);
+  for (const info of typeInfosForFile(typeNames, sym)) {
     for (const f of ((info && info.fields) || [])) {
       if (!f.name || f.name.startsWith('<')) continue;   // 컴파일러 생성 백킹 필드는 소스에 없다
       if (looksLikeDeclarationOf(s, f.name)) {

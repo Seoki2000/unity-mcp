@@ -417,6 +417,35 @@ check('속성+필드가 같은 줄이면 필드 선언으로 답하고 속성도
                    `member=${e.member ? e.member.name : 'null'} (기대 ${named})` };
 });
 
+// ── 독립 검증 3차의 남은 반례 (2026-08-28) ───────────────────────────────
+// 정밀도 98.9% / 재현율 95.3% 까지 왔지만 두 취약점이 남았다고 짚었다:
+// 생성자 범위의 **object initializer** 를 필드 선언으로 읽고(거짓 양성 19),
+// **중첩 타입의 필드**를 못 본다(가려진 190 중 166).
+
+// 27. ⭐ `new X { field = ... }` 는 필드 선언이 아니다. 생성자 범위 안이면 더 잘 걸린다.
+check('object initializer 줄을 field-declaration 이라고 하지 않는다', () => {
+  const f = 'Assets/1.Scripts/Monster/Boss/BossDataSO.cs';
+  const src = fs.readFileSync(path.join(ROOTDIR, f), 'utf8').split(String.fromCharCode(10));
+  const L = src.findIndex(t => /new\s+\w+\s*\{\s*\w+\s*=/.test(t)) + 1;
+  if (!L) return { ok: false, detail: 'object initializer 줄을 못 찾았다' };
+  const e = call({ errors: [{ file: f, line: L, message: 'x' }] }).errors[0];
+  return { ok: e.lineKind !== 'field-declaration' && !e.member,
+           detail: `line ${L} -> ${e.lineKind}, member=${e.member ? e.member.name : 'null'}` };
+});
+
+// 28. ⭐ 중첩 타입의 필드도 필드로 답해야 한다. 중첩 타입은 메서드가 없으면
+//     `typesBySourceFile` 에 안 들어오므로(문서가 없다) 선언 타입으로 찾아 붙여야 한다.
+check('중첩 타입의 필드 선언도 조인된다', () => {
+  const f = 'Assets/1.Scripts/Effects/EffectManager.cs';
+  const src = fs.readFileSync(path.join(ROOTDIR, f), 'utf8').split(String.fromCharCode(10));
+  // 중첩 struct 안의 `public GameObject go;` — 파일에서 그 형태를 찾는다.
+  const L = src.findIndex(t => /^\s*public\s+GameObject\s+go\s*;\s*$/.test(t)) + 1;
+  if (!L) return { ok: false, detail: '중첩 타입 필드 줄을 못 찾았다' };
+  const e = call({ errors: [{ file: f, line: L, message: 'x' }] }).errors[0];
+  return { ok: e.lineKind === 'field-declaration' && !!e.member && e.member.name === 'go',
+           detail: `line ${L} -> ${e.lineKind}, member=${e.member ? e.member.name + ':' + e.member.declaringType : 'null'}` };
+});
+
 // 표본 고르기 — 인덱스에서 시작해 소스로 내려간다(§4-(27): 추측으로 고르면 보장이 없다).
 function pickFieldDeclLine() {
   const sym = idx.symbols;

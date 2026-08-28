@@ -127,5 +127,17 @@ check('깨진 로드 경로를 개수가 아니라 목록으로 낸다', () => {
            detail: `unresolved ${unresolved} / 목록 ${list.length}(+생략 ${d.danglingLoadsOmitted || 0}) / 형태 ${shaped}` };
 });
 
+// 9. 상수가 상수로 만들어지는 로드 경로도 해석돼야 한다.
+//    `const string CatalogPath = CatalogFolder + "/EffectCatalog.asset";` 형태를 못 접으면
+//    그 호출이 "동적" 으로 과대 분류되고, 그 에셋의 영향 분석에서 로더가 사라진다.
+//    독립 검증 3차가 `EffectSystemSetup.cs:62` 로 짚었다.
+check('상수로 조립된 로드 경로가 해석된다', () => {
+  const d = JSON.parse(tools.callLocalTool(
+    'unity_impact_analysis', { target: 'Assets/9.ScriptableObject/Effects/EffectCatalog.asset' }, PORT).content[0].text);
+  const loads = (d.code && d.code.pathLoads) || [];
+  return { ok: loads.some(x => /EffectSystemSetup[.]cs$/.test(x)),
+           detail: 'pathLoads=' + JSON.stringify(loads) };
+});
+
 console.log(`\n${pass}/${pass + fail}`);
 process.exit(fail === 0 ? 0 : 1);

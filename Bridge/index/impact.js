@@ -425,7 +425,12 @@ function buildImpact(index, args) {
     // 엣지 자체가 없다. 그때 유일하게 남는 단서가 "가리키는 것이 없는 로드 경로" 목록이고,
     // 파일 이름이 같은 것만 골라 준다. 실측(2026-08-28): 에셋 하나를 옮기니 컴파일러와
     // 콘솔은 침묵하고 이 목록만 1 늘었다.
-    const base = target.path ? target.path.slice(target.path.lastIndexOf('/') + 1) : null;
+    // ⚠️ 에셋 대상의 경로 필드는 `assetPath` 다. 여기서 `target.path` 를 읽어서
+    // 이 분기가 **통째로 도달 불가능**했다(독립 검증 3차가 짚었다). 그리고 그 사실을
+    // 프로브가 못 잡은 이유는 "거짓 양성이 없다" 만 단언했기 때문이다 — 비어 있으면
+    // 그 단언은 항상 참이다(§4-(27)).
+    const tp = target.assetPath || null;
+    const base = tp ? tp.slice(tp.lastIndexOf('/') + 1) : null;
     if (base) {
       const near = (index.danglingLoads || []).filter(d => {
         const b = String(d.path || '');

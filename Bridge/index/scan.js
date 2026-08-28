@@ -148,6 +148,10 @@ const MAX_TEXT_BYTES = 16 * 1024 * 1024;
 // 런타임에 조립되는 것(`GUIDToAssetPath(guids[i])`, 매개변수)은 여전히 불가능하다.
 // 44건이 그렇고, 그 수를 응답에 실어 "못 본 몫" 을 드러낸다.
 const CONST_STRING_RE = /(?:const|static\s+readonly)\s+string\s+([A-Za-z_]\w*)\s*=\s*"([^"\r\n]*)"/g;
+// 상수가 **다른 상수로** 만들어지는 형태(`const string P = Folder + "/X.asset";`).
+// 리터럴만 담으면 그 선언이 맵에 안 들어가고, 그것을 쓰는 로드 호출이 "동적" 으로
+// 과대 분류된다 — 독립 검증 3차가 `EffectSystemSetup.cs:62` 로 짚었다.
+const CONST_EXPR_RE = /(?:const|static\s+readonly)\s+string\s+([A-Za-z_]\w*)\s*=\s*([^;\r\n]+);/g;
 const LOAD_CALL_RE = /(?:Resources\s*\.\s*Load(?:All|Async)?|AssetDatabase\s*\.\s*Load(?:AssetAtPath|MainAssetAtPath|AllAssetsAtPath|AllAssetRepresentationsAtPath))\s*(?:<[^>()]*>)?\s*\(([^;)]*)\)/g;
 
 /**
@@ -257,6 +261,24 @@ function scanOtherFiles(root, files, meta, refs, weak, resourcesMap) {
       CONST_STRING_RE.lastIndex = 0;
       let cm;
       while ((cm = CONST_STRING_RE.exec(text)) !== null) consts.set(cm[1], cm[2]);
+      // 리터럴이 아닌 상수 선언을 이미 아는 상수로 접는다. 상수가 상수를 참조하는 깊이가
+      // 있을 수 있으므로 몇 번 돌린다(수렴하면 멈춘다). 못 접으면 넣지 않는다 — 추측 금지.
+      const pending = [];
+      CONST_EXPR_RE.lastIndex = 0;
+      while ((cm = CONST_EXPR_RE.exec(text)) !== null) {
+        if (!consts.has(cm[1])) pending.push([cm[1], cm[2].trim()]);
+      }
+      for (let pass = 0; pass < 3 && pending.length; pass++) {
+        let progressed = false;
+        for (let i = pending.length - 1; i >= 0; i--) {
+          const folded = foldPathExpression(pending[i][1], consts);
+          if (folded === null) continue;
+          consts.set(pending[i][0], folded);
+          pending.splice(i, 1);
+          progressed = true;
+        }
+        if (!progressed) break;
+      }
 
       const isResourcesCall = /Resources\s*\.\s*Load/;
       let mm;

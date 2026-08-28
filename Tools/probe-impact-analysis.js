@@ -34,7 +34,7 @@ try {
   process.exit(3);
 }
 
-const EXPECT_PASS = 11;
+const EXPECT_PASS = 12;
 
 const has = (arr, re) => Array.isArray(arr) && arr.some(x => re.test(typeof x === 'string' ? x : JSON.stringify(x)));
 const count = arr => (Array.isArray(arr) ? arr.length : 0);
@@ -87,8 +87,17 @@ const PROBES = [
     (count(r.assets && r.assets.referencedBy) + ((r.assets && r.assets.referencedByOmitted) || 0)) === 3 &&
     count(r.assets.textualMatches) === 2],
 
-  ['모든 응답이 불확실성을 싣는다 (동적 로드 44 등)', { target: 'Hurtbox' }, r =>
-    r.unknown && r.unknown.dynamicLoadSites === 44 && typeof r.note === 'string' && r.note.length > 40],
+  // ⚠️ 동적 로드 수는 **44 -> 43** 이 됐다(2026-08-28). 회귀가 아니라 개선이다 —
+  //    상수가 상수로 만들어지는 선언(`const string P = Folder + "/X.asset";`)을 접게 되면서
+  //    한 건이 "동적" 에서 "해석됨" 으로 옮겨갔다. 독립 검증이 짚은 자리다.
+  ['모든 응답이 불확실성을 싣는다 (동적 로드 43 등)', { target: 'Hurtbox' }, r =>
+    r.unknown && r.unknown.dynamicLoadSites === 43 && typeof r.note === 'string' && r.note.length > 40],
+
+  // ⭐ 이 축은 **도달 불가능했다.** `target.path` 를 읽었는데 에셋 대상의 필드는
+  //    `target.assetPath` 다. 그래서 거짓 양성이 없다는 것만 확인하고(비어 있으니 당연히
+  //    통과했다) 실제로 답하는지는 아무도 안 봤다 — 독립 검증 3차가 짚었다.
+  //    §4-(27) 의 형태: 아무것도 없을 때도 참이 되는 단언.
+  ['asset: 파일명이 같은 깨진 로드 경로를 지목한다 (합성 입력)', { __synthetic: 'dangling' }, null],
 ];
 
 function main() {
@@ -100,8 +109,26 @@ function main() {
     let r, ok = false, err = null;
     const t0 = Date.now();
     try {
-      r = impact.buildImpact(idx, args);
-      ok = !!check(r);
+      if (args && args.__synthetic === 'dangling') {
+        // 실제 dangling 2건은 **없는 경로**를 가리키므로 그 경로로는 대상 해석이 안 된다
+        // (에셋이 없으니 당연하다). 그래서 "옮겨진 뒤" 상황을 합성한다: 존재하는 에셋과
+        // **파일명이 같은** dangling 항목을 인덱스에 하나 끼우고, 그 에셋에 물어본다.
+        const target = [...idx.guidToPath.values()].find(p2 => /\.prefab$/i.test(p2));
+        const base = target.slice(target.lastIndexOf('/') + 1);
+        const saved = idx.danglingLoads;
+        idx.danglingLoads = (saved || []).concat([
+          { file: 'Assets/_ProbeSynthetic/Loader.cs', path: 'Assets/_ProbeMovedAway/' + base, kind: 'asset-path' },
+        ]);
+        try {
+          r = impact.buildImpact(idx, { target });
+          const list = (r.assets && r.assets.danglingLoadPaths) || [];
+          ok = list.length === 1 && list[0].file === 'Assets/_ProbeSynthetic/Loader.cs' &&
+               r.summary.byAxis.danglingLoadPaths === 1 && !!r.assets.danglingLoadPathsNote;
+        } finally { idx.danglingLoads = saved; }
+      } else {
+        r = impact.buildImpact(idx, args);
+        ok = !!check(r);
+      }
     } catch (e) { err = e.message; }
     const ms = Date.now() - t0;
     if (ok) pass++;

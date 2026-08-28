@@ -115,8 +115,11 @@ check('기존 이름 키가 그대로다 (표본 회귀)', () => {
   const a = call('unity_find_callers', { method: 'BaseAttack::TryResolveHit' });
   const b = call('unity_find_callers', { method: 'Unit::TakeDamage' });
   const st = call('unity_index_status', {});
-  return { ok: a.totalCount === 8 && b.totalCount === 9 && st.stats.referenceEdges === 6305,
-           detail: `TryResolveHit ${a.totalCount}(기준 8), TakeDamage ${b.totalCount}(기준 9), refEdges ${st.stats.referenceEdges}(기준 6305)` };
+  // ⚠️ 참조 엣지 기준선은 6,305 -> **6,306** 이다(2026-08-28). 회귀가 아니라 개선이다:
+  //    상수로 조립된 로드 경로 한 건을 접게 되면서 경로 로드 엣지가 하나 늘었다
+  //    (`EffectSystemSetup.cs` -> `EffectCatalog.asset`). 줄어들면 문제로 본다.
+  return { ok: a.totalCount === 8 && b.totalCount === 9 && st.stats.referenceEdges === 6306,
+           detail: `TryResolveHit ${a.totalCount}(기준 8), TakeDamage ${b.totalCount}(기준 9), refEdges ${st.stats.referenceEdges}(기준 6306)` };
 });
 
 // 7. ⭐ 특정 오버로드를 물을 수 있다 — 사용자가 요청한 능력 자체다.
