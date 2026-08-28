@@ -386,6 +386,37 @@ check('여러 문서에 걸친 생성자의 두 번째 범위가 그 파일에 �
                    `-> 파일 뷰에 ${hit ? '있다' : '없다'}` };
 });
 
+// ── 독립 검증 3차가 짚은 것 (2026-08-28) ─────────────────────────────────
+// Roslyn 구문 트리를 정답지로 85,122줄을 대조하니 정밀도 96.2% / **재현율 70.5%** 였다.
+// 가려진 1,185줄의 대부분(996)이 `[SerializeReference] public X Y;` 처럼 **속성과 필드가
+// 같은 줄**인 경우였고, 거짓 양성의 큰 몫은 생성자의 `this.slot = slot;` 처럼 **대입 우변**이었다.
+
+// 25. ⭐ 생성자 안의 대입은 필드 선언이 아니다. `this.x = x;` 의 우변이 필드 이름과 같다.
+check('생성자 안의 대입 줄을 field-declaration 이라고 하지 않는다', () => {
+  const f = 'Assets/1.Scripts/Effects/EffectHandle.cs';
+  const src = fs.readFileSync(path.join(ROOTDIR, f), 'utf8').split(String.fromCharCode(10));
+  const L = src.findIndex(t => /^\s*this\.\w+\s*=\s*\w+\s*;\s*$/.test(t)) + 1;
+  if (!L) return { ok: false, detail: 'this.x = x; 줄을 못 찾았다' };
+  const e = call({ errors: [{ file: f, line: L, message: 'x' }] }).errors[0];
+  return { ok: e.lineKind !== 'field-declaration' && !e.member,
+           detail: `line ${L} ${JSON.stringify(src[L - 1].trim())} -> ${e.lineKind}, member=${e.member ? e.member.name : 'null'}` };
+});
+
+// 26. ⭐ 속성과 필드가 같은 줄이면 **둘 다** 말해야 한다.
+//     kind 는 member-attribute 로 두되(그 줄은 속성 줄이기도 하다) 필드 조인을 싣는다.
+check('속성+필드가 같은 줄이면 필드 선언으로 답하고 속성도 알린다', () => {
+  const f = 'Assets/1.Scripts/BT/Actions/Animation/GetAnimClipPlayTimeAction.cs';
+  const src = fs.readFileSync(path.join(ROOTDIR, f), 'utf8').split(String.fromCharCode(10));
+  const L = src.findIndex(t => /^\s*\[[^\]]+\]\s+public\s+.+\s+\w+\s*;\s*$/.test(t)) + 1;
+  if (!L) return { ok: false, detail: '속성+필드 한 줄을 못 찾았다' };
+  const e = call({ errors: [{ file: f, line: L, message: 'x' }] }).errors[0];
+  const named = (src[L - 1].match(/(\w+)\s*;\s*$/) || [])[1];
+  return { ok: e.lineKind === 'field-declaration' && e.attributesOnSameLine === true &&
+               !!e.member && e.member.name === named,
+           detail: `line ${L} -> ${e.lineKind}, attrSameLine=${e.attributesOnSameLine}, ` +
+                   `member=${e.member ? e.member.name : 'null'} (기대 ${named})` };
+});
+
 // 표본 고르기 — 인덱스에서 시작해 소스로 내려간다(§4-(27): 추측으로 고르면 보장이 없다).
 function pickFieldDeclLine() {
   const sym = idx.symbols;

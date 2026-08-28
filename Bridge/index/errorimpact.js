@@ -195,12 +195,61 @@ function looksLikeDeclarationOf(s, name) {
     const before = s.slice(0, at);
     if (before.includes('(')) continue;                       // 1
     if (m[1] === '.') continue;                               // 1b. `this.damage = 5;` 는 대입이다
+    // 1c. 이름이 `=` **뒤**에 있으면 대입의 우변이다. 생성자의 `this.slot = slot;` 이
+    //     그렇고, 독립 검증 3차의 거짓 양성 상당수가 이 형태였다.
+    if (before.includes('=')) continue;
     const identsBefore = before.match(IDENT_RE) || [];
     if (identsBefore.length === 0) continue;                  // 2
     const after = s.slice(at + name.length).trimStart();       // 3
     if (after === '' || after.startsWith(';') || after.startsWith('=') || after.startsWith(',')) return true;
   }
   return false;
+}
+
+/** 줄 앞의 속성 묶음(`[A] [B(x)]`)을 떼고 남은 부분. 없으면 빈 문자열. */
+function stripLeadingAttributes(s) {
+  let rest = s;
+  for (let guard = 0; guard < 8; guard++) {
+    if (!rest.startsWith('[')) break;
+    let depth = 0, end = -1;
+    for (let i = 0; i < rest.length; i++) {
+      if (rest[i] === '[') depth++;
+      else if (rest[i] === ']') { depth--; if (depth === 0) { end = i; break; } }
+    }
+    if (end < 0) return '';                  // 닫히지 않았다 — 여러 줄 속성이다
+    rest = rest.slice(end + 1).trim();
+  }
+  return rest;
+}
+
+/**
+ * 이 줄이 선언하는 필드를 인덱스에서 찾는다. 맞는 것이 없으면 null(추측 금지),
+ * 여러 개면 하나를 고르지 않고 후보를 준다.
+ *
+ * 두 자리에서 같은 규칙을 써야 한다 — 필드 선언 줄과 **속성+필드가 같은 줄**.
+ * 한쪽만 고치는 것이 이 저장소가 반복해 온 실수다(§4-(21)).
+ */
+function matchFieldOnLine(s, typeNames, sym) {
+  if (!s || !sym || !sym.typeByFullName) return null;
+  const names = new Set();
+  for (const fn of (typeNames || [])) {
+    const info = sym.typeByFullName.get(fn);
+    for (const f of ((info && info.fields) || [])) {
+      if (!f.name || f.name.startsWith('<')) continue;   // 컴파일러 생성 백킹 필드는 소스에 없다
+      if (looksLikeDeclarationOf(s, f.name)) {
+        names.add(JSON.stringify({ name: f.name, type: f.type || null, declaringType: info.fullName }));
+      }
+    }
+  }
+  if (names.size === 1) {
+    const m = JSON.parse([...names][0]);
+    return { member: { kind: 'field', name: m.name, type: m.type, declaringType: m.declaringType } };
+  }
+  if (names.size > 1) {
+    // 한 줄에 여러 필드가 맞았다(`int a, b;`). 하나로 정하지 않는다.
+    return { candidates: [...names].map(x => JSON.parse(x).name).sort().slice(0, 8) };
+  }
+  return null;
 }
 
 function classifyLine(srcLines, line, typeNames, sym) {
@@ -213,11 +262,28 @@ function classifyLine(srcLines, line, typeNames, sym) {
   if (FILE_LEVEL_RE.test(s)) return { kind: 'file-level' };
 
   if (s.startsWith('[') && !s.startsWith('[]')) {
-    // 아래로 내려가며 첫 코드 줄을 본다 — 속성이 여러 줄 붙을 수 있다.
+    const kindOfLine = (n) => (TYPE_DECL_RE.test(n) ? 'type-attribute' : 'member-attribute');
+    // 같은 줄에 선언까지 있는 경우가 많다(`[SerializeField] private int hp;`).
+    // kind 만 주고 끝내면 **필드를 가린다** — 독립 검증 3차가 그렇게 가려진 줄을 996개로
+    // 셌다(재현율 70.5%). 속성 묶음을 떼고 남은 부분으로 같은 필드 조인을 시도한다.
+    const rest = stripLeadingAttributes(s);
+    if (rest) {
+      const k = kindOfLine(rest);
+      if (k === 'member-attribute' && !STATEMENT_START_RE.test(rest)) {
+        const f = matchFieldOnLine(rest, typeNames, sym);
+        // 이 줄은 **필드 선언이다.** 속성이 같이 붙어 있을 뿐이므로 kind 는
+        // `field-declaration` 이고, 속성이 같은 줄에 있다는 것을 따로 말한다.
+        // (처음엔 kind 를 `member-attribute` 로 뒀는데, 그러면 `lineKind` 로 필드 선언을
+        //  고르는 쪽에서 998줄이 빠진다 — 독립 검증의 재현율 70.5% 가 그 몫이었다.)
+        if (f) return Object.assign({ kind: 'field-declaration', attributesOnSameLine: true }, f);
+      }
+      return { kind: k };
+    }
+    // 이 줄은 속성뿐이다 — 아래로 내려가며 첫 코드 줄을 본다.
     for (let k = line; k < srcLines.length; k++) {
       const n = String(srcLines[k] || '').trim();
       if (!n || n.startsWith('//') || n.startsWith('[')) continue;
-      return { kind: TYPE_DECL_RE.test(n) ? 'type-attribute' : 'member-attribute' };
+      return { kind: kindOfLine(n) };
     }
     return { kind: 'unknown' };          // 속성 뒤에 코드가 없다 — 단정하지 않는다
   }
@@ -231,27 +297,8 @@ function classifyLine(srcLines, line, typeNames, sym) {
   // **파라미터 이름** `name` 이 다른 타입의 필드 `Cat.name` 으로 나갔다.
   // 그래서 선언 자리인지를 같이 본다(아래 `looksLikeDeclarationOf`).
   if (STATEMENT_START_RE.test(s)) return { kind: 'unknown' };
-  const names = new Set();
-  if (sym && sym.typeByFullName) {
-    for (const fn of (typeNames || [])) {
-      const info = sym.typeByFullName.get(fn);
-      for (const f of ((info && info.fields) || [])) {
-        if (!f.name || f.name.startsWith('<')) continue;   // 컴파일러 생성 백킹 필드는 소스에 없다
-        if (looksLikeDeclarationOf(s, f.name)) {
-          names.add(JSON.stringify({ name: f.name, type: f.type || null, declaringType: info.fullName }));
-        }
-      }
-    }
-  }
-  if (names.size === 1) {
-    const m = JSON.parse([...names][0]);
-    return { kind: 'field-declaration', member: { kind: 'field', name: m.name, type: m.type, declaringType: m.declaringType } };
-  }
-  if (names.size > 1) {
-    // 한 줄에 여러 필드가 맞았다(`int a, b;` 또는 초기화자에 다른 필드가 나온다).
-    // 하나로 정하지 않고 후보를 준다.
-    return { kind: 'field-declaration', candidates: [...names].map(x => JSON.parse(x).name).sort().slice(0, 8) };
-  }
+  const f = matchFieldOnLine(s, typeNames, sym);
+  if (f) return Object.assign({ kind: 'field-declaration' }, f);
   return { kind: 'unknown' };
 }
 
@@ -331,6 +378,7 @@ function explain(index, args, meta) {
       ? { kind: 'in-method-body' }
       : classifyLine(srcLines, row.line, typeNames, sym);
     row.lineKind = cls.kind;
+    if (cls.attributesOnSameLine) row.attributesOnSameLine = true;
     if (cls.member) row.member = cls.member;
     else if (cls.candidates) row.memberCandidates = cls.candidates;
 
