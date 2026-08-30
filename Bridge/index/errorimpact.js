@@ -285,6 +285,83 @@ function matchFieldOnLine(s, typeNames, sym) {
   return null;
 }
 
+/**
+ * 이 줄이 **멤버(메서드·속성) 선언 줄**인가. 맞으면 인덱스에 있는 그 멤버를 준다.
+ *
+ * 왜 필요한가 — gap 의 `unknown` 1,187줄 중 **670(56%)** 이 이 형태였다(2026-08-31 전수).
+ * 그리고 그 670 의 대부분은 **이미 올바른 멤버에 귀속돼 있었다**: 일반 메서드 516(77.0%) ·
+ * 접근자 102(15.2%) · 귀속 없음 49(7.3%) · 컴파일러 생성 3(0.4%).
+ * 즉 도구는 "어느 멤버인지" 는 알면서 "이 줄이 무엇인지" 는 `unknown` 이라고 답하고 있었다.
+ *
+ * ⚠️ 문서가 오래 적어 온 "중괄호 깊이를 추적하면 덮인다" 는 **틀렸다.** 괄호 추적으로
+ *    덮이는 것은 24.3% 뿐이다. 이 함수가 겨냥하는 것은 그 24% 가 아니라 56% 다.
+ *
+ * 필드 판정과 같은 규율을 쓴다 — **이름이 줄에 있다** 만으로는 안 되고, 인덱스에 실제로
+ * 그 멤버가 있어야 하며 선언 자리여야 한다. 없으면 null 이다(추측 금지).
+ */
+function looksLikeMemberDeclarationOf(s, name, isMethod) {
+  const re = new RegExp('(^|[^A-Za-z0-9_])' + name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') +
+                        '(?![A-Za-z0-9_])', 'g');
+  let m;
+  while ((m = re.exec(s)) !== null) {
+    const at = m.index + m[1].length;
+    const before = s.slice(0, at);
+    if (m[1] === '.') continue;                       // `this.Foo()` — 호출이다
+    if (before.includes('(')) continue;               // 이미 인자 안이다
+    if (before.includes('=')) continue;               // `var x = Foo()` — 대입 우변
+    if (/\bnew\b/.test(before)) continue;
+    // 앞에 식별자(반환 타입·수식어)가 하나 이상 있어야 선언이다. `Foo();` 는 호출.
+    const identsBefore = before.match(IDENT_RE) || [];
+    if (identsBefore.length === 0) continue;
+    const after = s.slice(at + name.length);
+    if (isMethod) {
+      // 메서드: 이름 바로 뒤가 `(` 또는 제네릭 `<...>(`
+      if (/^\s*(<[^()]*>)?\s*\(/.test(after)) return true;
+    } else {
+      // 속성: 이름 뒤가 `{` 또는 `=>`. `public int Hp { get; set; }` / `public X Y => ...`
+      if (/^\s*(\{|=>)/.test(after)) return true;
+    }
+  }
+  return false;
+}
+
+function matchMemberOnLine(s, typeNames, sym) {
+  if (!s || !sym || !sym.typeByFullName) return null;
+  const hits = new Set();
+  for (const info of typeInfosForFile(typeNames, sym)) {
+    // 생성자는 이름이 `.ctor` 이라 소스에 그 글자로 안 나온다 — **타입 이름**으로 선언된다.
+    // 빼 두면 남는 unknown 의 최상위가 이것이 된다(2026-08-31 실측: 246 중 상당수).
+    const hasCtor = ((info && info.methods) || []).some(x => x.name === '.ctor');
+    if (hasCtor && info.name && looksLikeMemberDeclarationOf(s, info.name, true)) {
+      hits.add(JSON.stringify({
+        kind: 'constructor', name: info.name, declaringType: info.fullName, hasLineInfo: true,
+      }));
+    }
+    for (const mm of ((info && info.methods) || [])) {
+      const raw = mm.name;
+      if (!raw || raw.startsWith('<') || raw.startsWith('.')) continue;  // 컴파일러 생성·생성자
+      const acc = /^(get_|set_|add_|remove_)/.exec(raw);
+      const name = acc ? raw.slice(acc[0].length) : raw;
+      if (!name) continue;
+      const isMethod = !acc;
+      if (!looksLikeMemberDeclarationOf(s, name, isMethod)) continue;
+      hits.add(JSON.stringify({
+        kind: acc ? (acc[1] === 'add_' || acc[1] === 'remove_' ? 'event' : 'property') : 'method',
+        name, declaringType: info.fullName, hasLineInfo: typeof mm.line === 'number',
+      }));
+    }
+  }
+  if (hits.size === 1) return { member: JSON.parse([...hits][0]) };
+  if (hits.size > 1) {
+    // 오버로드거나 같은 이름의 속성/메서드가 겹친다. 하나로 정하지 않는다.
+    const list = [...hits].map(x => JSON.parse(x));
+    const names = [...new Set(list.map(x => x.name))].sort();
+    if (names.length === 1) return { member: list[0], overloads: list.length };
+    return { candidates: names.slice(0, 8) };
+  }
+  return null;
+}
+
 function classifyLine(srcLines, line, typeNames, sym) {
   if (!srcLines || typeof line !== 'number' || line <= 0 || line > srcLines.length) {
     return { kind: 'unknown' };
@@ -332,6 +409,10 @@ function classifyLine(srcLines, line, typeNames, sym) {
   if (STATEMENT_START_RE.test(s)) return { kind: 'unknown' };
   const f = matchFieldOnLine(s, typeNames, sym);
   if (f) return Object.assign({ kind: 'field-declaration' }, f);
+  // 필드가 아니면 **멤버(메서드·속성) 선언 줄**인지 본다. 필드를 먼저 보는 순서는
+  // 바꾸지 말 것 — `public Action OnHit;` 같은 필드가 메서드로 새면 안 된다.
+  const mem = matchMemberOnLine(s, typeNames, sym);
+  if (mem) return Object.assign({ kind: 'member-declaration' }, mem);
   return { kind: 'unknown' };
 }
 

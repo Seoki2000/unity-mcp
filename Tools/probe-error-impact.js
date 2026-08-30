@@ -270,17 +270,27 @@ check('lineKind 가 허용된 값이고 member 를 지어내지 않는다 (경�
   const src = fs.readFileSync(path.join(ROOTDIR, BA), 'utf8').split(String.fromCharCode(10));
   const rows = src.map((_, i) => ({ file: BA, line: i + 1, message: 'x' })).slice(0, 50);
   const allowed = new Set(['in-method-body', 'file-level', 'type-attribute', 'member-attribute',
-                           'type-declaration', 'field-declaration', 'blank-or-comment', 'unknown']);
-  const fieldNames = new Set();
+                           'type-declaration', 'field-declaration', 'member-declaration',
+                           'blank-or-comment', 'unknown']);
+  // member 는 필드뿐 아니라 메서드·속성·생성자도 될 수 있다(2026-08-31, member-declaration).
+  // 어느 쪽이든 **인덱스에 실재해야** 한다 — 지어내면 안 된다는 요구는 그대로다.
+  const memberNames = new Set();
   for (const fn of (idx.symbols.typesBySourceFile.get(BA) || [])) {
     const info = idx.symbols.typeByFullName.get(fn);
-    for (const f of ((info && info.fields) || [])) fieldNames.add(f.name);
+    if (!info) continue;
+    for (const f of (info.fields || [])) memberNames.add(f.name);
+    for (const m of (info.methods || [])) {
+      memberNames.add(m.name);
+      const acc = /^(get_|set_|add_|remove_)/.exec(m.name || '');
+      if (acc) memberNames.add(m.name.slice(acc[0].length));
+      if (m.name === '.ctor' && info.name) memberNames.add(info.name);
+    }
   }
   const kinds = new Set();
   let fabricated = 0;
   for (const e of (call({ errors: rows }).errors || [])) {
     if (e.lineKind) kinds.add(e.lineKind);
-    if (e.member && !fieldNames.has(e.member.name)) fabricated++;
+    if (e.member && !memberNames.has(e.member.name)) fabricated++;
   }
   const bad = [...kinds].filter(x => !allowed.has(x));
   return { ok: bad.length === 0 && fabricated === 0 && kinds.size >= 2,
@@ -361,8 +371,13 @@ check('메서드 시그니처 줄을 field-declaration 이라고 하지 않는�
   const L = src.findIndex(t => /ProfilerRecorder\s+TryStart\s*\(/.test(t)) + 1;
   if (!L) return { ok: false, detail: 'TryStart 시그니처 줄을 못 찾았다' };
   const e = call({ errors: [{ file: f, line: L, message: 'CS0246: x' }] }).errors[0];
-  return { ok: e.lineKind !== 'field-declaration' && !e.member,
-           detail: `line ${L} -> lineKind=${e.lineKind}, member=${e.member ? e.member.name : 'null'}` };
+  // 2026-08-31: 예전에는 여기서 바랄 수 있는 최선이 "필드라고 하지 않는다" 였다.
+  // 이제는 **이 줄이 무엇인지 말할 수 있다** — 메서드 TryStart 의 선언 줄이다.
+  // 파라미터 이름 `name` 이 다른 타입의 필드로 새던 원래 반례도 그대로 막는다.
+  const okKind = e.lineKind === 'member-declaration';
+  const okMember = !!e.member && e.member.name === 'TryStart' && e.member.kind === 'method';
+  return { ok: okKind && okMember,
+           detail: `line ${L} -> lineKind=${e.lineKind}, member=${e.member ? e.member.name + '/' + e.member.kind : 'null'}` };
 });
 
 // 24. ⭐ 여러 문서에 걸친 생성자 — 두 번째 파일의 범위도 그 파일 뷰에 있어야 한다.
@@ -499,6 +514,86 @@ function pickAttributeLine(wantType) {
   }
   return null;
 }
+
+// ── member-declaration (2026-08-31) ────────────────────────────────────────
+// gap 의 unknown 1,187 중 **670(56%)** 이 멤버 선언 줄이었다. 그 대부분은 이미 올바른
+// 멤버에 귀속돼 있었는데 "이 줄이 무엇인지" 만 unknown 이었다. 절반은 그 줄을 맞히는지,
+// 나머지 절반은 **아닌 것을 그렇다고 하지 않는지**를 본다(§4-(27)).
+
+check('속성 선언 줄을 member-declaration/property 로 답한다', () => {
+  const f = 'Assets/1.Scripts/Player/Life/PlayerLifeCycleController.cs';
+  let src; try { src = fs.readFileSync(path.join(ROOTDIR, f), 'utf8').split(String.fromCharCode(10)); }
+  catch { return { ok: false, detail: '표본 파일 없음' }; }
+  const L = src.findIndex(t => /\bGameplayAccess\s*=>/.test(t)) + 1;
+  if (!L) return { ok: false, detail: 'GameplayAccess 선언 줄을 못 찾았다' };
+  const e = call({ errors: [{ file: f, line: L, message: 'x' }] }).errors[0];
+  return { ok: e.lineKind === 'member-declaration' && e.member && e.member.kind === 'property' &&
+               e.member.name === 'GameplayAccess',
+           detail: `line ${L} -> ${e.lineKind} / ${e.member ? e.member.kind + ':' + e.member.name : 'null'}` };
+});
+
+check('생성자 선언 줄을 member-declaration/constructor 로 답한다', () => {
+  const f = 'Assets/1.Scripts/Effects/EffectHandle.cs';
+  let src; try { src = fs.readFileSync(path.join(ROOTDIR, f), 'utf8').split(String.fromCharCode(10)); }
+  catch { return { ok: false, detail: '표본 파일 없음' }; }
+  const L = src.findIndex(t => /\bEffectHandle\s*\(/.test(t) && !/new\s+EffectHandle/.test(t)) + 1;
+  if (!L) return { ok: false, detail: '생성자 줄을 못 찾았다' };
+  const e = call({ errors: [{ file: f, line: L, message: 'x' }] }).errors[0];
+  return { ok: e.lineKind === 'member-declaration' && e.member && e.member.kind === 'constructor',
+           detail: `line ${L} -> ${e.lineKind} / ${e.member ? e.member.kind + ':' + e.member.name : 'null'}` };
+});
+
+check('호출 줄을 선언이라고 하지 않는다 (거짓 양성 검사)', () => {
+  // 본문 안의 호출·대입은 member-declaration 이 되면 안 된다. 인덱스에 그 이름이
+  // 있으니 "이름이 줄에 있다" 만 보면 전부 걸린다 — 그래서 선언 자리를 요구한다.
+  const bad = [];
+  const files = [...idx.symbols.typesBySourceFile.keys()].filter(f => f.startsWith('Assets/')).slice(0, 60);
+  const rows = [];
+  for (const f of files) {
+    let src; try { src = fs.readFileSync(path.join(ROOTDIR, f), 'utf8').split(String.fromCharCode(10)); } catch { continue; }
+    for (let i = 1; i <= src.length; i++) {
+      const s = src[i - 1].trim();
+      // 명백한 호출·대입만 고른다: `x.Foo();` / `var y = Foo();` / `Foo();`
+      if (!/^(var\s|[A-Za-z_][\w.]*\s*=\s*)?[A-Za-z_][\w.]*\s*\(.*\)\s*;$/.test(s)) continue;
+      rows.push({ file: f, line: i, message: 'x' });
+    }
+  }
+  let checked = 0;
+  for (let k = 0; k < rows.length; k += 50) {
+    for (const e of (call({ errors: rows.slice(k, k + 50) }).errors || [])) {
+      checked++;
+      if (e.lineKind === 'member-declaration') bad.push(`${e.file}:${e.line}`);
+    }
+  }
+  return { ok: checked > 100 && bad.length === 0,
+           detail: `호출 줄 ${checked} 검사 / 선언으로 오판 ${bad.length}` + (bad.length ? ' 예: ' + bad.slice(0, 3).join(', ') : '') };
+});
+
+check('전수: 본문(exact) 줄에는 member-declaration 이 붙지 않는다', () => {
+  const files = [...idx.symbols.typesBySourceFile.keys()].filter(f => f.startsWith('Assets/')).slice(0, 60);
+  const rows = [];
+  for (const f of files) {
+    let src; try { src = fs.readFileSync(path.join(ROOTDIR, f), 'utf8').split(String.fromCharCode(10)); } catch { continue; }
+    for (let i = 1; i <= src.length; i++) {
+      const s = src[i - 1].trim();
+      if (!s || s.startsWith('//') || s === '{' || s === '}') continue;
+      rows.push({ file: f, line: i, message: 'x' });
+    }
+  }
+  let exact = 0, leaked = 0;
+  for (let k = 0; k < rows.length; k += 50) {
+    for (const e of (call({ errors: rows.slice(k, k + 50) }).errors || [])) {
+      if (!(e.method && e.method.containment === 'exact')) continue;
+      // ⚠️ 생성자 범위의 exact 는 **일부러** 분류를 돌린다(위 in-method-body 주석 참조 —
+      //    안 그러면 필드 초기화자 2,417줄이 가려진다). 그래서 한 줄짜리 생성자
+      //    `public GraphElement() { ... }` 는 exact 이면서 선언 줄이 맞다. 제외한다.
+      if (/^\.c?ctor$/.test(e.method.name || '')) continue;
+      exact++;
+      if (e.lineKind === 'member-declaration') leaked++;
+    }
+  }
+  return { ok: exact > 200 && leaked === 0, detail: `exact 줄 ${exact} / 누출 ${leaked}` };
+});
 
 console.log(`\n${pass}/${pass + fail}`);
 process.exit(fail === 0 ? 0 : 1);
