@@ -120,9 +120,23 @@ check('기존 이름 키가 그대로다 (표본 회귀)', () => {
   //   6,306 -> 6,302 : `DefaultVolumeProfile.asset` 의 고아 컴포넌트 4개를 지웠다(§5).
   //                    죽은 스크립트 GUID 도 `refs` 에 엣지로 세어지므로 4가 줄었다
   //                    (실측 확인: 그 4개는 실재 에셋을 가리키지 않았다).
+  //   6,302 -> 6,275 : B군(서드파티·아트 잔여물) 정리로 문서 28개를 지웠다(2026-08-31, §5).
+  //                    27 만 줄어든 것이 맞다 — 엣지는 (에셋, GUID) 쌍이고
+  //                    `URP Renderer.asset` 하나가 같은 GUID 를 2번 갖고 있었다.
+  //                    같은 정리로 `missingScript` 597->569, `scriptComponents` 7016->6988.
   // 여기서 **더** 줄면 그때는 도구 문제로 볼 것.
-  return { ok: a.totalCount === 8 && b.totalCount === 9 && st.stats.referenceEdges === 6302,
-           detail: `TryResolveHit ${a.totalCount}(기준 8), TakeDamage ${b.totalCount}(기준 9), refEdges ${st.stats.referenceEdges}(기준 6302)` };
+  //
+  // ⚠️ 이 기준은 **기본 커버리지(assets)** 의 값이다. `sweep-field-checks` 나
+  //    `probe-ecid-promotion` 은 전체 커버리지로 강제 재빌드하고 그 캐시를 디스크에 남긴다.
+  //    그 뒤에 이 프로브를 다시 돌리면 refEdges 가 7,392 로 나와 **정리를 회귀로 오독한다**
+  //    (2026-08-31 에 실제로 두 번 그랬다). 커버리지가 다르면 그 항목은 재지 않는다.
+  const cov = st.guidCoverage || (st.stats && st.stats.guidCoverage);
+  const edgesOk = cov === 'assets' ? st.stats.referenceEdges === 6275 : true;
+  const edgeNote = cov === 'assets'
+    ? `refEdges ${st.stats.referenceEdges}(기준 6275)`
+    : `refEdges 건너뜀 — 커버리지가 '${cov}' 다(기준은 assets 값)`;
+  return { ok: a.totalCount === 8 && b.totalCount === 9 && edgesOk,
+           detail: `TryResolveHit ${a.totalCount}(기준 8), TakeDamage ${b.totalCount}(기준 9), ${edgeNote}` };
 });
 
 // 7. ⭐ 특정 오버로드를 물을 수 있다 — 사용자가 요청한 능력 자체다.

@@ -46,7 +46,10 @@ const SWEEP = {
 const A_OCCLUSION = 'Assets/2.Prefabs/Map/LevelDeliveryV3/Dependencies/PropWrappers/PF_Prop_object_alarm_52f66357_V3.prefab';
 const A_BOSSSCENE = 'Assets/0.Scenes/BossScene.unity';
 const A_ALLMESH = 'Assets/0.Scenes/Art/LevelDeliveryV3/all_mesh.unity';
-const A_PORTAL = 'Assets/50.Art/VFX/Common/Interactive/Portals/Blue/PortalBlueIdle.prefab';
+// ⚠️ 예전 표본은 `50.Art/.../PortalBlueIdle.prefab` 의 컴포넌트였는데 **2026-08-31 정리로
+//    지워졌다**(B군). 지금 "미해석 + ECID 없음" 이 남아 있는 곳은 이 VFX 그래프 하나뿐이다 —
+//    그래프 노드 목록이 그 fileID 를 참조해서 정리에서 일부러 건너뛴 자리다(§5).
+const A_VFX_NOECID = 'Assets/INab Studio/Vfx Assets/Character Effects/Core/Graphs/Character Fire.vfx';
 const A_VOLUME = 'Assets/0.Scenes/MainFlow/4.MapScene/Global Volume Profile.asset';
 const A_GAMEMGR = 'Assets/2.Prefabs/Managers/GameManager.prefab';
 
@@ -129,7 +132,7 @@ const PROBES = [
   }],
 
   ['8. ECID 가 없으면 이름을 지어내지 않는다 (스크립트없음·ECID없음)', () => {
-    const row = rowOf(A_PORTAL, '2918740286100004385');
+    const row = rowOf(A_VFX_NOECID, '8926484042661621328');
     return !!row && !row.script.typeNameFromAsset && row.displayName === 'MonoBehaviour';
   }],
 
@@ -231,8 +234,11 @@ const PROBES = [
     const r = queries.findMissingScripts(idx, { maxResults: 100 });
     const named = (r.missing || []).filter(m => m.typeNameFromAsset).length;
     const total = (r.missing || []).length;
-    // 실측 2026-08-30: missing 10 중 이름이 나오는 것은 오클루전 3개뿐이다.
-    return total === 10 && named === 3;
+    // 실측 2026-08-31: missing **4** 중 이름이 나오는 것은 오클루전 3개.
+    // ⚠️ 10 -> 4 는 회귀가 아니라 **정리다** — B군 서드파티·아트 잔여물 6 GUID
+    // (문서 28개)를 지웠다(§5). 남은 1개는 VFX 그래프 노드 목록이 참조해서 건너뛴 것.
+    // 여기서 **더 줄면** 오클루전(A군, 현상 유지로 종결)이 사라졌다는 뜻이니 먼저 원인을 물을 것.
+    return total === 4 && named === 3;
   }],
 
   ['21. 이름을 붙이는 비용이 예산 안이다', () => {

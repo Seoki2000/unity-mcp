@@ -38,12 +38,20 @@ const PROJECT = process.argv[2] || 'C:/Unity/MainProject';
 //   scriptComponents 7019 -> 7016 (지운 4 + 프로젝트 증가 1)
 //   missingScript    601  -> 597 (지운 4)
 // 이 수치가 **더** 줄면 그때는 도구 문제로 볼 것.
+// ⚠️ 2026-08-31 에 둘을 또 내렸다 — **도구가 덜 보게 된 것이 아니라 프로젝트를 또 정리했다.**
+// B군(서드파티·아트 잔여물) Missing Script 6 GUID 의 문서 28개를 지웠다(§5):
+// `50.Art` 의 포탈·존 프리팹 17 · MapGen 메시 캐시 3 · KMK 테스트 1 · INab 데모 `.mat` 5 ·
+// INab URP Renderer 의 고아 SSAO 2. m_Component 항목 18개도 같이 지웠다(안 지우면 dangling).
+//   scriptComponents 7016 -> 6988 (-28)
+//   missingScript     597 -> 569  (-28)
+// 남은 missing 은 4다: 오클루전 A군 3(현상 유지로 종결) + VFX 그래프가 참조해서 건너뛴 1.
+// 이 수가 **더** 줄면 그때는 도구 문제이거나, A군이 지워진 것이니 먼저 원인을 물을 것.
 const BASELINE = {
-  scriptComponents: 7016,
+  scriptComponents: 6988,
   resolved: 864,
   unresolvedPackage: 5554,
   unresolvedInAssets: 0,
-  missingScript: 597,
+  missingScript: 569,
   fieldChecks: 864,
   baseChainIncomplete: 242,
   // ⚠️ §6 의 "낡은 키 가진 컴포넌트 19" 는 **확신 케이스**다 — 베이스 체인이 사용자
