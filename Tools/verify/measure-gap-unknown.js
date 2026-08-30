@@ -95,3 +95,22 @@ const cont = bucket['다음 줄로 이어짐'] || 0;
 const close = bucket['닫는 기호로 시작'] || 0;
 console.log();
 console.log(`괄호/이어짐 추적으로 덮일 수 있는 것: ${bracket + cont + close} / ${unknown} = ${((bracket + cont + close) * 100 / Math.max(1, unknown)).toFixed(1)}%`);
+
+// ── 기준선 (2026-08-31 실측) ───────────────────────────────────────────────
+// 독립 검증이 짚었다: 이 스크립트가 **아무 값에나 성공으로 끝났다.** 수치를 찍기만 하고
+// 단언하지 않으면 그건 회귀 기준이 아니라 그냥 출력이다 — §6 이 이미 그렇게 말하고 있다.
+const BASE = { unknown: 691, memberDeclaration: 496, total: 8005 };
+const md = kinds['member-declaration'] || 0;
+const drift = [];
+// unknown 은 **늘면** 문제다(분류가 덜 된 것). member-declaration 은 **줄면** 문제다.
+if (unknown > BASE.unknown) drift.push(`unknown ${BASE.unknown} -> ${unknown} (+${unknown - BASE.unknown})`);
+if (md < BASE.memberDeclaration) drift.push(`member-declaration ${BASE.memberDeclaration} -> ${md} (${md - BASE.memberDeclaration})`);
+console.log();
+if (drift.length) {
+  console.log('⚠️ 기준선에서 나쁜 쪽으로 어긋났다:');
+  for (const d of drift) console.log('  ' + d);
+  console.log('  분류기가 덜 답하고 있다는 뜻이다. 프로젝트가 자라 total 이 늘었다면');
+  console.log(`  (지금 ${total}, 기준 ${BASE.total}) 비율로 다시 판단하고 이 기준선을 갱신할 것.`);
+  process.exit(1);
+}
+console.log(`기준선 통과 (unknown ${unknown} <= ${BASE.unknown}, member-declaration ${md} >= ${BASE.memberDeclaration}).`);

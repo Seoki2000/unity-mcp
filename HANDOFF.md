@@ -211,8 +211,8 @@ node Tools/sweep-field-checks.js | tail -5     # §6 전수 집계 (약 32 s, Un
 | 메서드 줄 정보의 모집단 | 줄 있음 **5,960** / 없음 **1,305**(추상·인터페이스·이벤트 add/remove·Netcode RPC 핸들러 등 **컴파일러·ILPP 생성**). Assembly-CSharp 만 보면 3,005 / 689. 없는 것은 null 이고 0 으로 채우지 않는다 |
 | 부분 클래스 | 메서드마다 `fileIndex` 를 싣는다(**파일이 둘 이상인 타입에만**, **588개** — 2026-08-28 캐시 실측. 583 은 생성자 문서 수정 전 값이다). 없으면 `AudioSourceProxy.cs` 와 `.Methods.cs` 가 서로의 범위를 갖는다 |
 | 본문시작−선언줄 거리 | 중앙 **2** / 최대 5 (표본 276) → 위로 8줄 스캔이면 덮인다. ⚠️ 단 **로컬 함수를 품은 메서드**는 자기 첫 문장이 로컬 함수 뒤에 온다(선언 98 / 본문 108 실례). 여러 줄 시그니처·긴 주석도 8줄을 넘는다 — 전수 대조는 40줄까지 훑는다(§4-(36)) |
-| 오류 줄이 무엇인가 | `lineKind` 로 답한다. 매핑된 559 파일 **45,816 코드 줄**: exact 34,124(74.5%) / signature 3,746(8.2%) / **gap 7,706(16.8%)** / 귀속 없음 240. gap 7,706 중 kind 가 붙는 것 **6,630 = 86.0%**: file-level 2,596 · field-declaration 1,827 · member-attribute 1,090 · type-declaration 758 · type-attribute 359 · **unknown 1,074(13.9%)**. `file-level` 2,596 은 메서드 귀속을 아예 하지 않고, `field-declaration` 1,827 은 실제 필드로 조인된다. 재는 스크립트는 프로브 18·21 이 같은 계산을 한다 |
-| 남은 unknown 1,074 의 정체 | (분류 도입 직후 2,164 였고 `endLine` 정정으로 줄었다) 표본 분류: 접근수정자로 시작 · 여러줄 시그니처 · 세미콜론 종료 · 제어·접근자 키워드 순. 대부분 **여러 줄 필드 초기화자의 연속 줄**과 **여러 줄 시그니처**다 — 중괄호 깊이를 추적해야 덮인다 |
+| 오류 줄이 무엇인가 | `lineKind` 로 답한다. **2026-08-31 재측정**(매핑된 Assets 559 파일 45,816줄): exact·signature 가 아닌 줄 **8,005** 중 unknown **691 = 8.6%**. 분류: file-level 2,770 · field-declaration 2,287 · type-declaration 773 · member-attribute 626 · **member-declaration 496** · type-attribute 357. ⚠️ 예전 값(gap 7,706 / unknown 1,074 / 13.9%)은 `member-declaration` **이전** 것이다 — 조건이 다른 두 측정이다. 재는 명령: `node Tools/verify/measure-gap-unknown.js`(약 15 s, **기준선을 단언하고 어긋나면 exit 1**) |
+| 남은 unknown 691 의 정체 | ⚠️ **오래 적어 온 "대부분 여러 줄 필드 초기화자와 여러 줄 시그니처" 는 틀렸다**(2026-08-31 전수). 그때 가장 큰 덩어리는 멤버 선언 줄 56% 였고 그것을 `member-declaration` 으로 답하게 해서 1,187 -> 691 이 됐다. **지금 남은 691** 의 상위는 제네릭 타입의 생성자(인덱스 이름이 `` Foo`1 ``) · `typesBySourceFile` 에 안 들어오는 타입의 필드 · 여러 줄 문자열 리터럴이다. 괄호 추적으로 덮이는 것은 여전히 일부뿐이다 — 더 줄이려면 소스를 실제로 파싱해야 하고 그 비용은 안 쟀다 |
 | PDB Document 경로 | **절대와 상대가 섞여 있다.** PDB 189개 중 첫 문서가 절대 **15** / 상대 **174**(`.\Library\PackageCache\...`). `Library/PackageCache/...` 를 가리키는 document **10,849개**. `toProjectRelative` 는 절대를 전제하므로 상대는 전부 버려진다 — 패키지 심볼의 조인 키가 없어 보이던 이유다(§4-(37)) |
 | 필드 서명 | **전** 어셈블리(189개) 105,972 필드 실패 **0건**. **사용자** 어셈블리는 5,920(중복 포함)/5,554(제거) — **모집단이 다르다.** 디스크 대조는 표본 150/150 이고, 소스가 매핑 안 된 타입의 필드 1,052개는 **대조 자체가 불가능** |
 | 오버로드 실제 규모 | 선언 2개 이상 키 **146**, 그런 키를 향하는 엣지 **366/8,673 = 4.2%**, 영향 키 101(상위는 벤더). **키를 안 바꾼 근거다** |
@@ -1765,6 +1765,11 @@ byte 단위로 같은 것이 들어 있다. 그 템플릿은
 | git | 5 `.mat` | 5 | INab 데모 머티리얼의 HDRP 플러그인 메타(이 프로젝트는 URP) |
 | git | 1 `.asset` | 2 | INab `URP Renderer` 의 고아 SSAO |
 
+⚠️ **커밋 `783b11a` 의 메시지가 분할을 틀리게 적었다** (독립 검증 2026-08-31 지적).
+제목이 "git 쪽 8개" 라고 했는데 실제 git diff 에서 지운 `!u!114` 문서는 **7개**다
+(`URP Renderer.asset` 2 + `.mat` 5). 8 은 **건너뛴 `.vfx` 1건까지 센 컴포넌트 수**였다.
+문서 기준의 올바른 분할은 **git 7 / SVN 21 = 28** 이다. 위 표가 정본이다.
+
 **건너뛴 1건**: `INab Studio/…/Character Fire.vfx` 의 컴포넌트 하나.
 **VFX 그래프의 노드 목록이 그 fileID 를 참조한다** — 문서만 지우면 dangling 이 되어
 지금보다 나빠진다. 스크립트가 자동으로 걸러 냈다(§4-(48)).
@@ -1957,7 +1962,11 @@ curl -s -X POST http://127.0.0.1:3000/message \
   (본문 시작 132/155/167/178, 선언 130/153/165/176). `declarations` 가 4개로 나와야 한다.
   `Unit::TakeDamage` 는 선언 2개(62, 147)에 호출자 9개
 - 오류 줄 분류(`lineKind`) — **`node Tools/probe-error-impact.js`**(프로브 15~19, 22~26).
-  gap 줄의 분류율 **86.0%**(7,706 중 6,630), unknown 13.9%. `file-level` 은 `method: null` 이어야 하고,
+  ⚠️ **2026-08-31 갱신**: exact·signature 아닌 줄 **8,005** 중 unknown **691(8.6%)**,
+  `member-declaration` **496**. 예전 값(7,706 중 6,630, unknown 13.9%)은 `member-declaration`
+  이전 측정이라 **조건이 다르다** — 나란히 비교하지 말 것. 단언은
+  `node Tools/verify/measure-gap-unknown.js` 가 한다(unknown 이 늘거나 member-declaration 이
+  줄면 exit 1). `file-level` 은 `method: null` 이어야 하고,
   본문(exact) 줄은 `in-method-body` 여야 한다(프로브 21). 파일 뷰 누출 0(프로브 20)
 - IL 디코딩 실패 **0**, 엣지 **8,673**
 - 참조 엣지 **6,305** = 위 분해는 6,267 시점의 것이다(ProjectSettings 를 스캔 루트에 넣기 전).

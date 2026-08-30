@@ -198,7 +198,13 @@ function resolveScriptType(index, guid) {
  * 없거나 빈 문자열이면 null 을 낸다 — **이름을 지어내지 않는다.** 실측(2026-08-29):
  * 붙어 있는 미해석 컴포넌트 1,400 중 310 은 ECID 가 없다. 그 310 은 계속 모른다고 답한다.
  */
-const ECID_TYPE_RE = /^[A-Za-z_][A-Za-z0-9_.`+]*$/;
+// 타입 이름: 식별자를 `.`(네임스페이스) 또는 `+`(중첩)로 이은 것. 제네릭 아리티는 `` `1 ``.
+// ⚠️ 단순히 "허용 문자만 나온다" 로 쓰면 `Foo..Bar` · `Foo.` · `Foo++Bar` 가 전부 통과한다
+//    (독립 검증 2026-08-31 이 넷을 실제로 통과시켰다). 구분자가 **식별자 사이에만** 오도록
+//    쓴다. 어셈블리 이름도 마찬가지로 검사한다 — `bad assembly name::Foo` 가 통과했었다.
+const ECID_IDENT = '[A-Za-z_@][A-Za-z0-9_@]*(?:`\\d+)?';
+const ECID_TYPE_RE = new RegExp('^' + ECID_IDENT + '(?:[.+]' + ECID_IDENT + ')*$');
+const ECID_ASM_RE = new RegExp('^' + ECID_IDENT + '(?:[.\\-]' + ECID_IDENT + ')*$');
 
 /**
  * `<어셈블리>::<네임스페이스.타입>` 을 **엄격하게** 읽는다. 형태가 아니면 null 이다.
@@ -219,7 +225,7 @@ function parseEcid(raw) {
   if (parts.length !== 2) return null;
   const assembly = parts[0].trim();
   const fullName = parts[1].trim();
-  if (!assembly || !ECID_TYPE_RE.test(fullName)) return null;
+  if (!ECID_ASM_RE.test(assembly) || !ECID_TYPE_RE.test(fullName)) return null;
   return { assembly, fullName };
 }
 
@@ -464,38 +470,47 @@ function isUnityBuiltinGuid(guid) {
  *     2. GUID 가 실제로 들어 있는 **그 문서만** 파싱한다(줄 범위 텍스트 검사로 먼저 거른다)
  */
 function ecidForMissingGuid(index, guid, candidates) {
-  let best = null;
-  let bestSize = Infinity;
-  for (const rel of candidates.slice(0, 5)) {
+  // ⚠️ **하나만 보고 포기하면 안 된다.** 처음에는 "가장 작은 참조 에셋 하나" 만 열고,
+  //    거기에 ECID 가 없으면 `null` 을 냈다. 그런데 같은 GUID 를 참조하는 에셋 중
+  //    **일부만** ECID 를 기록해 두는 일이 있다(Unity 가 저장한 시점이 다르면 그렇다).
+  //    그러면 파일 크기 순서 때문에 "근거 없음" 이 나온다 — 도구 설명이 약속한 것과 다르다.
+  //    독립 검증(2026-08-31)이 여섯 에셋 중 마지막 하나에만 이름이 있는 반례로 짚었다.
+  //
+  //    그래서 **작은 것부터 차례로** 보고 첫 증거에서 멈춘다. 비용은 그대로다 — 대부분
+  //    첫 파일에서 찾는다(실측: missing 4건에 11 ms). 상한은 8개로 둔다.
+  const sized = [];
+  for (const rel of candidates.slice(0, 8)) {
     let st;
     try { st = fs.statSync(path.join(index.root, rel)); } catch { continue; }
-    if (st.size < bestSize) { bestSize = st.size; best = rel; }
+    sized.push([st.size, rel]);
   }
-  if (!best) return null;
+  sized.sort((a, b) => a[0] - b[0]);
 
-  let text;
-  try { text = fs.readFileSync(path.join(index.root, best), 'utf8'); } catch { return null; }
-  let sp;
-  try { sp = yaml.splitDocuments(text); } catch { return null; }
-  if (!sp || !Array.isArray(sp.docs)) return null;
+  for (const [, rel] of sized) {
+    let text;
+    try { text = fs.readFileSync(path.join(index.root, rel), 'utf8'); } catch { continue; }
+    let sp;
+    try { sp = yaml.splitDocuments(text); } catch { continue; }
+    if (!sp || !Array.isArray(sp.docs)) continue;
 
-  for (const d of sp.docs) {
-    let inRange = false;
-    for (let i = d.start; i <= d.end && i < sp.lines.length; i++) {
-      if (sp.lines[i].includes(guid)) { inRange = true; break; }
+    for (const d of sp.docs) {
+      let inRange = false;
+      for (let i = d.start; i <= d.end && i < sp.lines.length; i++) {
+        if (sp.lines[i].includes(guid)) { inRange = true; break; }
+      }
+      if (!inRange) continue;
+
+      let pr;
+      try { pr = yaml.parseDocument(sp.lines, d, {}); } catch { continue; }
+      const b = pr && pr.body;
+      if (!b || !b.m_Script || b.m_Script.guid !== guid) continue;
+
+      // 승격 로직은 하나만 쓴다 — 엄격 파싱·사유 분류·이름 존재 검사가 여기 다 들어 있다.
+      const promoted = promoteFromAsset(b, null, index);
+      if (!promoted) continue;          // 이 문서엔 없다 — 다음 문서/다음 에셋을 본다
+      promoted.evidenceAsset = rel;
+      return promoted;
     }
-    if (!inRange) continue;
-
-    let pr;
-    try { pr = yaml.parseDocument(sp.lines, d, {}); } catch { continue; }
-    const b = pr && pr.body;
-    if (!b || !b.m_Script || b.m_Script.guid !== guid) continue;
-
-    // 승격 로직은 하나만 쓴다 — 엄격 파싱·사유 분류·이름 존재 검사가 여기 다 들어 있다.
-    const promoted = promoteFromAsset(b, null, index);
-    if (!promoted) return null;
-    promoted.evidenceAsset = best;
-    return promoted;
   }
   return null;
 }

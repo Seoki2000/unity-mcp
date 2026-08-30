@@ -210,6 +210,31 @@ function looksLikeDeclarationOf(s, name) {
   return false;
 }
 
+/**
+ * 줄 끝의 `//` 주석을 뗀다. **문자열 리터럴 안의 `//` 는 건드리지 않는다**(URL 등).
+ *
+ * 왜 필요한가 — 독립 검증(2026-08-31)이 짚었다. 분류기는 줄 **전체**를 훑어 인덱스에
+ * 있는 멤버·필드 이름을 찾는데, 주석은 코드가 아니다:
+ *     UnknownType x; // public void Row()
+ * 이 줄이 `member-declaration / Row` 로 나갔다. 실제 진단은 앞의 필드 선언에 있는데
+ * **주석 속의 옛 이름**이 답으로 올라간 것이다. 컴파일이 깨진 동안(인덱스가 직전 성공
+ * 빌드를 설명할 때) 특히 위험하다 — 새로 쓴 선언은 인덱스에 없고 주석의 옛 이름은 있다.
+ */
+function stripTrailingComment(s) {
+  let q = null;
+  for (let i = 0; i < s.length; i++) {
+    const c = s[i];
+    if (q) {
+      if (c === '\\') { i++; continue; }
+      if (c === q) q = null;
+      continue;
+    }
+    if (c === '"' || c === '\'') { q = c; continue; }
+    if (c === '/' && s[i + 1] === '/') return s.slice(0, i).trimEnd();
+  }
+  return s;
+}
+
 /** 줄 앞의 속성 묶음(`[A] [B(x)]`)을 떼고 남은 부분. 없으면 빈 문자열. */
 function stripLeadingAttributes(s) {
   let rest = s;
@@ -311,8 +336,16 @@ function looksLikeMemberDeclarationOf(s, name, isMethod) {
     if (before.includes('=')) continue;               // `var x = Foo()` — 대입 우변
     if (/\bnew\b/.test(before)) continue;
     // 앞에 식별자(반환 타입·수식어)가 하나 이상 있어야 선언이다. `Foo();` 는 호출.
+    //
+    // 예외 하나 — **수식어 없는 생성자**는 앞에 아무것도 없다(`Widget() { }` 는 유효한 C#).
+    // 호출문 `Widget();` 과 구별되는 것은 **`;` 로 끝나지 않는다**는 점이다(뒤에 본문 `{`,
+    // 초기화자 `: base(...)`, 또는 식 본문 `=>` 가 온다). 독립 검증이 짚은 자리다.
     const identsBefore = before.match(IDENT_RE) || [];
-    if (identsBefore.length === 0) continue;
+    if (identsBefore.length === 0) {
+      const tail = s.slice(at + name.length).trim();
+      const ctorLike = isMethod && /^\([^;]*\)\s*(\{|:|=>)/.test(tail);
+      if (!ctorLike) continue;
+    }
     const after = s.slice(at + name.length);
     if (isMethod) {
       // 메서드: 이름 바로 뒤가 `(` 또는 제네릭 `<...>(`
@@ -367,8 +400,11 @@ function classifyLine(srcLines, line, typeNames, sym) {
     return { kind: 'unknown' };
   }
   const text = String(srcLines[line - 1] || '');
-  const s = text.trim();
-  if (!s || s.startsWith('//') || s.startsWith('*') || s.startsWith('/*')) return { kind: 'blank-or-comment' };
+  const raw = text.trim();
+  if (!raw || raw.startsWith('//') || raw.startsWith('*') || raw.startsWith('/*')) return { kind: 'blank-or-comment' };
+  // 이름 조인은 **코드 부분에만** 한다. 꼬리 주석의 옛 이름이 답으로 올라가면 안 된다.
+  const s = stripTrailingComment(raw);
+  if (!s) return { kind: 'blank-or-comment' };
   if (FILE_LEVEL_RE.test(s)) return { kind: 'file-level' };
 
   if (s.startsWith('[') && !s.startsWith('[]')) {
@@ -386,6 +422,11 @@ function classifyLine(srcLines, line, typeNames, sym) {
         // (처음엔 kind 를 `member-attribute` 로 뒀는데, 그러면 `lineKind` 로 필드 선언을
         //  고르는 쪽에서 998줄이 빠진다 — 독립 검증의 재현율 70.5% 가 그 몫이었다.)
         if (f) return Object.assign({ kind: 'field-declaration', attributesOnSameLine: true }, f);
+        // 속성이 같은 줄에 붙은 **멤버 선언**도 있다(`[Obsolete] public int Count => 0;`).
+        // 필드만 보고 끝내면 그 줄이 `member-attribute` 로 나가 무엇의 선언인지 못 말한다
+        // — 필드에서 이미 겪은 실패와 같은 형태다(독립 검증 2026-08-31). 순서는 필드 먼저.
+        const mem0 = matchMemberOnLine(rest, typeNames, sym);
+        if (mem0) return Object.assign({ kind: 'member-declaration', attributesOnSameLine: true }, mem0);
       }
       return { kind: k };
     }

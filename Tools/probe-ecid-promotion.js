@@ -33,7 +33,7 @@ const yv = require(path.join(__dirname, '..', 'Bridge', 'index', 'yamlvalues'));
 tools.setLogger(() => {});
 
 const PROJECT = process.argv[2] || 'C:/Unity/MainProject';
-const EXPECT_PASS = 23;
+const EXPECT_PASS = 24;
 
 // 전수 불변식의 기준값. 프로젝트가 자라면 늘 수 있다 — **줄면** 승격이 덜 답한다는 뜻이다.
 const SWEEP = {
@@ -170,8 +170,11 @@ const PROBES = [
 
   // ── 형태가 깨진 값을 타입 이름으로 올리지 않는다 (독립 검증 지적) ─────
   ['15. 형태가 깨진 ECID 는 승격하지 않는다', () => {
+    // 뒤쪽 다섯은 독립 검증(2026-08-31)이 통과시킨 것들이다 — 정규식이 "허용 문자만
+    // 나온다" 였고 구분자 위치를 안 봤다. 어셈블리 쪽은 아예 검사하지 않았다.
     const bad = ['A::B::C', 'Assembly-CSharp::not a type', '::', 'NoSeparator.Type',
-      '::Type', 'Asm::', '', '   ', 'Asm::9Bad', 'Asm::has space'];
+      '::Type', 'Asm::', '', '   ', 'Asm::9Bad', 'Asm::has space',
+      'Asm::Foo..Bar', 'Asm::Foo.', 'Asm::.Foo', 'Asm::Foo++Bar', 'bad assembly name::Foo'];
     const ok = bad.every(v => queries._promoteFromAsset({ m_EditorClassIdentifier: v }, null, idx) === null);
     // 그리고 표준형은 여전히 읽는다 (아무것도 승격 안 하는 것으로 통과하면 안 된다)
     const good = queries._promoteFromAsset(
@@ -222,12 +225,55 @@ const PROBES = [
       top.typeNameFromAsset.verified === false;
   }],
 
-  ['19. 이름의 근거가 된 에셋을 같이 준다', () => {
+  ['19. 이름의 근거가 된 에셋이 실제로 그 GUID 를 담고 있다', () => {
+    // ⚠️ 원래 단언은 `sampleAssets.concat([ev]).includes(ev)` 였다 — **항상 참이다.**
+    //    ev 를 붙인 직후에 ev 를 찾으니 무엇을 넣어도 통과한다. §4-(27) 의 형태를
+    //    이 저장소가 또 만든 것이고, 독립 검증이 짚었다. 이제 **파일을 열어 확인한다.**
     const r = queries.findMissingScripts(idx, { maxResults: 100 });
-    const top = (r.missing || []).find(m => m.typeNameFromAsset);
-    const ev = top && top.typeNameFromAsset.evidenceAsset;
-    return typeof ev === 'string' && /^Assets\//.test(ev) &&
-      (top.sampleAssets || []).concat([ev]).includes(ev);
+    const named = (r.missing || []).filter(m => m.typeNameFromAsset);
+    if (!named.length) return false;
+    for (const m of named) {
+      const ev = m.typeNameFromAsset.evidenceAsset;
+      if (typeof ev !== 'string' || !/^Assets\//.test(ev)) return false;
+      let text;
+      try { text = fs.readFileSync(path.join(PROJECT, ev), 'utf8'); } catch { return false; }
+      // 그 에셋이 이 GUID 를 참조하고, 기록된 이름도 실제로 그 파일 안에 있어야 한다.
+      if (!text.includes(m.guid)) return false;
+      if (!text.includes(m.typeNameFromAsset.fullName)) return false;
+    }
+    return true;
+  }],
+
+  ['19b. 증거가 첫 에셋에 없어도 찾아낸다 (합성 반례)', () => {
+    // 독립 검증이 짚은 자리: 예전 구현은 가장 작은 참조 에셋 **하나만** 열고
+    // 거기 ECID 가 없으면 포기했다. 파일 크기 순서 때문에 "근거 없음" 이 나왔다.
+    const tmp = path.join(PROJECT, 'Assets', '_McpProbeEvidenceTmp');
+    const fake = 'ffffffffffffffffffffffffffffffff';
+    const head = '%YAML 1.1\n%TAG !u! tag:unity3d.com,2011:\n';
+    const doc = (ecid) => '--- !u!114 &11400000\nMonoBehaviour:\n  m_GameObject: {fileID: 0}\n' +
+      '  m_Script: {fileID: 11500000, guid: ' + fake + ', type: 3}\n' +
+      '  m_Name: \n  m_EditorClassIdentifier: ' + ecid + '\n';
+    try {
+      fs.mkdirSync(tmp, { recursive: true });
+      // 작은 파일엔 이름이 없고, 큰 파일에만 있다.
+      fs.writeFileSync(path.join(tmp, 'a.asset'), head + doc(''), 'utf8');
+      fs.writeFileSync(path.join(tmp, 'b.asset'), head + doc('Asm::EvidenceOnlyHere') +
+        '# padding'.padEnd(4000, 'x') + '\n', 'utf8');
+      const saved = idx.scriptRefs.get(fake);
+      idx.scriptRefs.set(fake, new Set([
+        'Assets/_McpProbeEvidenceTmp/a.asset', 'Assets/_McpProbeEvidenceTmp/b.asset']));
+      try {
+        const r = queries.findMissingScripts(idx, { maxResults: 200 });
+        const row = (r.missing || []).find(m => m.guid === fake);
+        return !!row && !!row.typeNameFromAsset &&
+          row.typeNameFromAsset.fullName === 'EvidenceOnlyHere' &&
+          /b\.asset$/.test(row.typeNameFromAsset.evidenceAsset);
+      } finally {
+        if (saved) idx.scriptRefs.set(fake, saved); else idx.scriptRefs.delete(fake);
+      }
+    } finally {
+      try { fs.rmSync(tmp, { recursive: true, force: true }); } catch { /* 정리 실패는 무시 */ }
+    }
   }],
 
   ['20. ECID 가 없는 missing 은 이름을 지어내지 않는다', () => {

@@ -569,6 +569,26 @@ check('호출 줄을 선언이라고 하지 않는다 (거짓 양성 검사)', (
            detail: `호출 줄 ${checked} 검사 / 선언으로 오판 ${bad.length}` + (bad.length ? ' 예: ' + bad.slice(0, 3).join(', ') : '') };
 });
 
+check('꼬리 주석의 이름을 선언이라고 하지 않는다 (독립 검증 반례)', () => {
+  // 분류기는 줄 전체를 훑어 인덱스의 멤버 이름을 찾는다. 주석은 코드가 아니다.
+  // 컴파일이 깨진 동안 특히 위험하다 — 새 선언은 인덱스에 없고 주석의 옛 이름은 있다.
+  const f = 'Assets/1.Scripts/Dev/Profiler/Editor/ProfilerWindow.cs';
+  const names = idx.symbols.typesBySourceFile.get(f) || [];
+  if (!names.length) return { ok: false, detail: '표본 타입 없음' };
+  const cases = [
+    ['UnknownType x; // public void Row()', 'unknown'],
+    ['int hp; // Row() 를 부르던 자리', 'unknown'],
+    // 문자열 안의 `//` 는 주석이 아니다 — 이걸 잘라내면 진짜 선언을 놓친다
+    ['static VisualElement Row() // 진짜 선언 + 주석', 'member-declaration'],
+  ];
+  const bad = [];
+  for (const [line, want] of cases) {
+    const got = ei.classifyLine(['x', line, 'y'], 2, names, idx.symbols);
+    if (got.kind !== want) bad.push(`${JSON.stringify(line.slice(0, 34))} -> ${got.kind} (기대 ${want})`);
+  }
+  return { ok: bad.length === 0, detail: bad.length ? bad.join(' / ') : `${cases.length}건 전부 기대대로` };
+});
+
 check('전수: 본문(exact) 줄에는 member-declaration 이 붙지 않는다', () => {
   const files = [...idx.symbols.typesBySourceFile.keys()].filter(f => f.startsWith('Assets/')).slice(0, 60);
   const rows = [];
