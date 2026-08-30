@@ -450,6 +450,56 @@ function isUnityBuiltinGuid(guid) {
   return /^0{16}/.test(guid);
 }
 
+/**
+ * 없어진 스크립트 GUID 하나에 대해, 그것을 참조하는 에셋에서 **에셋이 기록한 타입 이름**을 캔다.
+ *
+ * 왜 도구가 직접 하나 — 예전에는 GUID 만 답하고 note 로 "이름은 `unity_get_asset_components`
+ * 에서 보라" 고 넘겼다. 그런데 "무엇이 없어졌나" 를 묻는 도구가 바로 이것이다.
+ * GUID 열 개를 받아 하나씩 다른 도구로 옮겨 물어야 답이 나오면, 그 답은 없는 것과 비슷하다.
+ *
+ * 비용을 어떻게 낮췄나 (실측 2026-08-30, missing 10건):
+ *   순진한 방법(첫 참조 에셋을 통째로 파싱) **544 ms / 34.45 MB**
+ *   지금 방법 **11 ms / 2.12 MB** — 49배. 답은 동일했다. 두 가지를 한다:
+ *     1. 참조 에셋 중 **가장 작은 것**을 고른다(같은 답인데 읽는 양이 준다)
+ *     2. GUID 가 실제로 들어 있는 **그 문서만** 파싱한다(줄 범위 텍스트 검사로 먼저 거른다)
+ */
+function ecidForMissingGuid(index, guid, candidates) {
+  let best = null;
+  let bestSize = Infinity;
+  for (const rel of candidates.slice(0, 5)) {
+    let st;
+    try { st = fs.statSync(path.join(index.root, rel)); } catch { continue; }
+    if (st.size < bestSize) { bestSize = st.size; best = rel; }
+  }
+  if (!best) return null;
+
+  let text;
+  try { text = fs.readFileSync(path.join(index.root, best), 'utf8'); } catch { return null; }
+  let sp;
+  try { sp = yaml.splitDocuments(text); } catch { return null; }
+  if (!sp || !Array.isArray(sp.docs)) return null;
+
+  for (const d of sp.docs) {
+    let inRange = false;
+    for (let i = d.start; i <= d.end && i < sp.lines.length; i++) {
+      if (sp.lines[i].includes(guid)) { inRange = true; break; }
+    }
+    if (!inRange) continue;
+
+    let pr;
+    try { pr = yaml.parseDocument(sp.lines, d, {}); } catch { continue; }
+    const b = pr && pr.body;
+    if (!b || !b.m_Script || b.m_Script.guid !== guid) continue;
+
+    // 승격 로직은 하나만 쓴다 — 엄격 파싱·사유 분류·이름 존재 검사가 여기 다 들어 있다.
+    const promoted = promoteFromAsset(b, null, index);
+    if (!promoted) return null;
+    promoted.evidenceAsset = best;
+    return promoted;
+  }
+  return null;
+}
+
 function findMissingScripts(index, args) {
   const rows = [];
   const builtin = [];
@@ -475,6 +525,18 @@ function findMissingScripts(index, args) {
   rows.sort((a, b) => b.referencingAssetCount - a.referencingAssetCount || a.guid.localeCompare(b.guid));
   const page = pageOf(rows, args.offset, args.maxResults);
 
+  // 돌려주는 페이지에만 이름을 붙인다. 전체에 붙이면 페이지 밖까지 파일을 읽는다.
+  let namedCount = 0;
+  let staleGuidCount = 0;
+  for (const row of page.items) {
+    const all = index.scriptRefs.get(row.guid);
+    const p = ecidForMissingGuid(index, row.guid, all ? [...all].sort() : (row.sampleAssets || []));
+    if (!p) continue;
+    row.typeNameFromAsset = p;
+    namedCount++;
+    if (p.typeWithThisNameCompiles) staleGuidCount++;
+  }
+
   const notes = [];
   if (index.guidCoverage !== 'full') {
     notes.push('GUID coverage is partial (Library/PackageCache not indexed), so scripts that live in ' +
@@ -484,6 +546,19 @@ function findMissingScripts(index, args) {
     notes.push('These GUIDs are referenced by m_Script but have no .meta anywhere in the project. ' +
                'In the Editor the component shows "The associated script can not be loaded". ' +
                'Either the class was deleted/renamed, or its assembly is no longer part of this project.');
+    if (namedCount) {
+      notes.push(`${namedCount} of them carry typeNameFromAsset: the type name the referencing asset ` +
+                 'recorded in m_EditorClassIdentifier, read from the asset named in evidenceAsset. ' +
+                 'It is unverified (verified:false) - nothing compiles under that GUID to check it ' +
+                 'against, and it is stale if the class was renamed before it went away. The rest have ' +
+                 'no such record, so this tool does not guess a name for them.');
+    }
+    if (staleGuidCount) {
+      notes.push(`${staleGuidCount} of the named ones have typeWithThisNameCompiles:true - a type with ` +
+                 'that exact full name builds today, so the class is not gone and the component is ' +
+                 'pointing at an old GUID (typically the script was deleted and re-created, giving its ' +
+                 '.meta a new one). For those the fix is to reassign the script, not to restore anything.');
+    }
   } else {
     notes.push('No missing script references found.');
   }

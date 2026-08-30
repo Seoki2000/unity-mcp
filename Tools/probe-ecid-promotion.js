@@ -33,7 +33,7 @@ const yv = require(path.join(__dirname, '..', 'Bridge', 'index', 'yamlvalues'));
 tools.setLogger(() => {});
 
 const PROJECT = process.argv[2] || 'C:/Unity/MainProject';
-const EXPECT_PASS = 19;
+const EXPECT_PASS = 23;
 
 // 전수 불변식의 기준값. 프로젝트가 자라면 늘 수 있다 — **줄면** 승격이 덜 답한다는 뜻이다.
 const SWEEP = {
@@ -205,6 +205,42 @@ const PROBES = [
       null, idx);
     return !!synth && synth.typeWithThisNameCompiles === true &&
       synth.unverifiedReason === 'script-not-in-project';
+  }],
+
+  // ── find_missing_scripts 도 이름으로 답하는가 (2026-08-30) ───────────
+  // 승격을 만들고 정작 "무엇이 없어졌나" 를 묻는 주력 도구를 안 고치면 §4-(21) 이다.
+  // 예전 이 도구는 GUID 만 답하고 note 로 "이름은 get_asset_components 에서 보라" 고 했다.
+  ['18. missing script 가 GUID 만이 아니라 이름을 답한다', () => {
+    const r = queries.findMissingScripts(idx, { maxResults: 100 });
+    const named = (r.missing || []).filter(m => m.typeNameFromAsset);
+    const top = (r.missing || []).find(m => m.referencingAssetCount === 108);
+    return named.length >= 3 && !!top && top.typeNameFromAsset &&
+      top.typeNameFromAsset.fullName === 'VeyTrace.Rendering.Occlusion.OcclusionSection' &&
+      top.typeNameFromAsset.verified === false;
+  }],
+
+  ['19. 이름의 근거가 된 에셋을 같이 준다', () => {
+    const r = queries.findMissingScripts(idx, { maxResults: 100 });
+    const top = (r.missing || []).find(m => m.typeNameFromAsset);
+    const ev = top && top.typeNameFromAsset.evidenceAsset;
+    return typeof ev === 'string' && /^Assets\//.test(ev) &&
+      (top.sampleAssets || []).concat([ev]).includes(ev);
+  }],
+
+  ['20. ECID 가 없는 missing 은 이름을 지어내지 않는다', () => {
+    const r = queries.findMissingScripts(idx, { maxResults: 100 });
+    const named = (r.missing || []).filter(m => m.typeNameFromAsset).length;
+    const total = (r.missing || []).length;
+    // 실측 2026-08-30: missing 10 중 이름이 나오는 것은 오클루전 3개뿐이다.
+    return total === 10 && named === 3;
+  }],
+
+  ['21. 이름을 붙이는 비용이 예산 안이다', () => {
+    // 실측 11 ms (가장 작은 참조 에셋만 읽고 그 문서만 파싱). 순진한 구현은 544 ms 였다.
+    // 이 단언이 깨지면 "전 문서를 파싱" 으로 되돌아간 것이다.
+    const t0 = Date.now();
+    queries.findMissingScripts(idx, { maxResults: 100 });
+    return (Date.now() - t0) < 300;
   }],
 
   // ── 전수 불변식 (다른 경로로 구한 답과 대조 — 규칙 3) ────────────────

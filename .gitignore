@@ -1,1 +1,8 @@
 .omc/
+
+# 검증 오라클의 빌드 산출물 (소스만 커밋한다 — bin/obj 는 34 MB 다)
+Tools/verify/roslyn-oracle~/bin/
+Tools/verify/roslyn-oracle~/obj/
+Tools/verify/.profile/
+Tools/verify/measurement-results.json
+Tools/verify/roslyn-ground-truth.json

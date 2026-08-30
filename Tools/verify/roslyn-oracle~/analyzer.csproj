@@ -1,0 +1,27 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!--
+    Roslyn 어셈블리는 설치된 .NET SDK 안에 있다(NuGet 이 아니라).
+    기본값은 지금 도는 SDK 에서 자동으로 구한다. 다른 SDK 를 쓰려면 경로를 넘겨라:
+        dotnet build -p:RoslynBinCore="D:/dotnet/sdk/10.0.400/Roslyn/bincore"
+    설치된 SDK 목록은 `dotnet` 의 list-sdks 옵션으로 본다.
+  -->
+  <PropertyGroup Condition="'$(RoslynBinCore)' == ''">
+    <RoslynBinCore>$(NetCoreRoot)sdk/$(NETCoreSdkVersion)/Roslyn/bincore</RoslynBinCore>
+  </PropertyGroup>
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Reference Include="Microsoft.CodeAnalysis">
+      <HintPath>$(RoslynBinCore)/Microsoft.CodeAnalysis.dll</HintPath>
+    </Reference>
+    <Reference Include="Microsoft.CodeAnalysis.CSharp">
+      <HintPath>$(RoslynBinCore)/Microsoft.CodeAnalysis.CSharp.dll</HintPath>
+    </Reference>
+  </ItemGroup>
+</Project>

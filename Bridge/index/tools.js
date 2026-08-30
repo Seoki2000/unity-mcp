@@ -595,7 +595,7 @@ function toolDefinitions() {
     },
     {
       name: 'unity_find_missing_scripts',
-      description: 'Find assets whose components reference a script that no longer exists (Editor shows "The associated script can not be loaded"). Found by joining serialized m_Script GUIDs against .meta files.',
+      description: 'Find assets whose components reference a script that no longer exists (Editor shows "The associated script can not be loaded"). Found by joining serialized m_Script GUIDs against .meta files. Where the referencing asset recorded a type name (m_EditorClassIdentifier), it is reported as typeNameFromAsset with verified:false, so the answer names what is missing instead of only its GUID; typeWithThisNameCompiles distinguishes a deleted class from a stale GUID pointing at one that still builds.',
       inputSchema: { type: 'object', properties: { ...paging }, required: [] },
       annotations: ro,
     },

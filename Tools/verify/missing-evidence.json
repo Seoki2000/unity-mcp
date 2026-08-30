@@ -1,0 +1,259 @@
+[
+ {
+  "guid": "010b78ca8837feb48bc4bc32f6ff5804",
+  "refs": 108,
+  "names": [],
+  "idents": [
+   "VeyTrace.Rendering.Occlusion::VeyTrace.Rendering.Occlusion.OcclusionSection"
+  ],
+  "fields": [
+   "renderers",
+   "colliders"
+  ],
+  "kinds": [
+   ".prefab"
+  ],
+  "samples": [
+   "Assets/2.Prefabs/Map/LevelDeliveryV3/Dependencies/PropWrappers/PF_Prop_PF_Prop_GameObject_002_2a080255_V3.prefab",
+   "Assets/2.Prefabs/Map/LevelDeliveryV3/Dependencies/PropWrappers/PF_Prop_PF_Prop_GameObject_002_2ecc7490_V3.prefab",
+   "Assets/2.Prefabs/Map/LevelDeliveryV3/Dependencies/PropWrappers/PF_Prop_PF_Prop_Wall_4a0272d1_V3.prefab"
+  ]
+ },
+ {
+  "guid": "338e9578d1797374b858ead231938d29",
+  "refs": 12,
+  "names": [],
+  "idents": [],
+  "fields": [
+   "rotateVector",
+   "rotateSpace"
+  ],
+  "kinds": [
+   ".prefab"
+  ],
+  "samples": [
+   "Assets/50.Art/VFX/Common/Interactive/Portals/Blue/PortalBlueIdle.prefab",
+   "Assets/50.Art/VFX/Common/Interactive/Portals/Green/PortalGreenIdle.prefab",
+   "Assets/50.Art/VFX/Common/Interactive/Portals/Green/PortalGreenOpen.prefab"
+  ]
+ },
+ {
+  "guid": "5caf0a47863f037419a872370a7d1807",
+  "refs": 12,
+  "names": [],
+  "idents": [
+   "VeyTrace.Rendering.Occlusion::VeyTrace.Rendering.Occlusion.ElevationLevel"
+  ],
+  "fields": [
+   "contentRoot",
+   "contentRenderers"
+  ],
+  "kinds": [
+   ".prefab"
+  ],
+  "samples": [
+   "Assets/2.Prefabs/Map/LevelDeliveryV3/Stage/PF_Stage_01_V3.prefab",
+   "Assets/2.Prefabs/Map/LevelDeliveryV3/Zones/PF_Zone_L_Type_A_V3.prefab",
+   "Assets/2.Prefabs/Map/LevelDeliveryV3/Zones/PF_Zone_L_Type_B_V3.prefab"
+  ]
+ },
+ {
+  "guid": "90be40df8f94dcf43a5d9aab5923965d",
+  "refs": 12,
+  "names": [],
+  "idents": [
+   "VeyTrace.Rendering.Occlusion::VeyTrace.Rendering.Occlusion.ElevationStack"
+  ],
+  "fields": [],
+  "kinds": [
+   ".prefab"
+  ],
+  "samples": [
+   "Assets/2.Prefabs/Map/LevelDeliveryV3/Stage/PF_Stage_01_V3.prefab",
+   "Assets/2.Prefabs/Map/LevelDeliveryV3/Zones/PF_Zone_L_Type_A_V3.prefab",
+   "Assets/2.Prefabs/Map/LevelDeliveryV3/Zones/PF_Zone_L_Type_B_V3.prefab"
+  ]
+ },
+ {
+  "guid": "22e815ce54ff10c4cb16c17eb2c27586",
+  "refs": 5,
+  "names": [],
+  "idents": [],
+  "fields": [
+   "waveFunction",
+   "startValue",
+   "amplitude",
+   "phase",
+   "frequency"
+  ],
+  "kinds": [
+   ".prefab"
+  ],
+  "samples": [
+   "Assets/50.Art/VFX/Common/Interactive/Portals/Blue/PortalBlueIdle.prefab",
+   "Assets/50.Art/VFX/Common/Interactive/Portals/Green/PortalGreenIdle.prefab",
+   "Assets/50.Art/VFX/Common/Interactive/Portals/Purple/PortalPurpleIdle.prefab"
+  ]
+ },
+ {
+  "guid": "da692e001514ec24dbc4cca1949ff7e8",
+  "refs": 5,
+  "names": [],
+  "idents": [],
+  "fields": [
+   "version",
+   "hdPluginSubTargetMaterialVersions"
+  ],
+  "kinds": [
+   ".mat"
+  ],
+  "samples": [
+   "Assets/INab Studio/Demo Assets/INab Studio/Materials/Grid 3.mat",
+   "Assets/INab Studio/Demo Assets/INab Studio/Materials/Grid Floor 2.mat",
+   "Assets/INab Studio/Demo Assets/Unity Companion License/StarterAssets/ThirdPersonController/Character/Materials/M_Arms.mat"
+  ]
+ },
+ {
+  "guid": "5b71ad40e238046238f9b0c6f33c3791",
+  "refs": 3,
+  "names": [
+   "SM_Gen_Prop_Barrel_Metal_03_Convex",
+   "SM_Gen_Prop_Chain_01_Convex",
+   "SM_Gen_Prop_Chain_Anchor_01_Convex"
+  ],
+  "idents": [],
+  "fields": [
+   "ConvexMeshes",
+   "HashOfSourceMeshes"
+  ],
+  "kinds": [
+   ".asset"
+  ],
+  "samples": [
+   "Assets/50.Art/MapGen/MapObj/mesh/level/SM_Gen_Prop_Barrel_Metal_03_Convex.asset",
+   "Assets/50.Art/MapGen/MapObj/mesh/level/SM_Gen_Prop_Chain_01_Convex.asset",
+   "Assets/50.Art/MapGen/MapObj/mesh/level/SM_Gen_Prop_Chain_Anchor_01_Convex.asset"
+  ]
+ },
+ {
+  "guid": "081ffb0090424ba4cb05370a42ead6b9",
+  "refs": 1,
+  "names": [],
+  "idents": [],
+  "fields": [],
+  "kinds": [
+   ".vfx"
+  ],
+  "samples": [
+   "Assets/INab Studio/Vfx Assets/Character Effects/Core/Graphs/Character Fire.vfx"
+  ]
+ },
+ {
+  "guid": "0fd9ee276a1023e439cf7a9c393195fa",
+  "refs": 1,
+  "names": [
+   "TestAnimationCurveVolumeComponent"
+  ],
+  "idents": [],
+  "fields": [
+   "active",
+   "testParameter"
+  ],
+  "kinds": [
+   ".asset"
+  ],
+  "samples": [
+   "Assets/99.Settings/DefaultVolumeProfile.asset"
+  ]
+ },
+ {
+  "guid": "547a3a5865c201e42b933cbf702a40ba",
+  "refs": 1,
+  "names": [],
+  "idents": [],
+  "fields": [
+   "materialNameToModify",
+   "materialToModify"
+  ],
+  "kinds": [
+   ".prefab"
+  ],
+  "samples": [
+   "Assets/50.Art/TestAssets/KMKTestAssets/FreeLowPolyRobot/Meshes_and_Animations/RandomModularRobots_Prefab.prefab"
+  ]
+ },
+ {
+  "guid": "5a00a63fdd6bd2a45ab1f2d869305ffd",
+  "refs": 1,
+  "names": [
+   "OasisFogVolumeComponent"
+  ],
+  "idents": [],
+  "fields": [
+   "active",
+   "Density",
+   "StartDistance"
+  ],
+  "kinds": [
+   ".asset"
+  ],
+  "samples": [
+   "Assets/99.Settings/DefaultVolumeProfile.asset"
+  ]
+ },
+ {
+  "guid": "60f3b30c03e6ba64d9a27dc9dba8f28d",
+  "refs": 1,
+  "names": [
+   "OutlineVolumeComponent"
+  ],
+  "idents": [],
+  "fields": [
+   "active",
+   "Enabled"
+  ],
+  "kinds": [
+   ".asset"
+  ],
+  "samples": [
+   "Assets/99.Settings/DefaultVolumeProfile.asset"
+  ]
+ },
+ {
+  "guid": "74955a4b0b4243bc87231e8b59ed9140",
+  "refs": 1,
+  "names": [
+   "TestVolume"
+  ],
+  "idents": [],
+  "fields": [
+   "active",
+   "param"
+  ],
+  "kinds": [
+   ".asset"
+  ],
+  "samples": [
+   "Assets/99.Settings/DefaultVolumeProfile.asset"
+  ]
+ },
+ {
+  "guid": "9008a067f4d626c4d8bc4bc48f04bb89",
+  "refs": 1,
+  "names": [
+   "ScreenSpaceAmbientOcclusion"
+  ],
+  "idents": [],
+  "fields": [
+   "active",
+   "quality",
+   "rayTracing"
+  ],
+  "kinds": [
+   ".asset"
+  ],
+  "samples": [
+   "Assets/INab Studio/Common URP/URP Renderer.asset"
+  ]
+ }
+]
