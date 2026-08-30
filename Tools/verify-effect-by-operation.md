@@ -178,12 +178,108 @@ Assets\_McpEffectProbe\McpProbeCaller.cs(10,36): error CS1061:
   줄어 `Assets\_McpEffectProbe\…` 가 깨지고 도구가 `resolution: unresolved` 를 답한다
   (도구 버그가 아니다). JSON 파일로 넘겨서 확인했다
 
-## 덮지 못한 것 (2026-08-28 기준)
+## 2026-08-31 — 남은 둘을 돌렸다. **`effectByOperation` 은 이제 전부 실검증됐다** (Unity 라이브)
 
-- **Resources.Load 키 축의 이동 실험** — `asset-path` 형태만 옮겨 봤다.
-  `Resources/` 폴더를 옮기면 키 해석이 어떻게 되는지는 확인하지 않았다
-- **씬 안의 배선**(프리팹이 아닌 `.unity`)에 대한 delete/move — 형태가 같아 보이지만
-  실험은 프리팹으로만 했다
+픽스처를 셋 늘렸다: `McpProbeResLoad.cs`(상수 키 + `Resources.Load<GameObject>` — Resources
+키 축), `Assets/_McpEffectProbe/Resources/McpProbeRes.prefab`, `McpProbeScene.unity`
+(`McpProbeWiring` + `McpProbeTarget` 을 붙이고 `onProbe` 를 이름으로 배선한 **씬**).
+
+씬의 배선 두 줄은 프리팹과 같다:
+```yaml
+m_TargetAssemblyTypeName: McpProbeTarget, Assembly-CSharp
+m_MethodName: ProbeTargetMethod
+```
+⚠️ 씬 YAML 을 손으로 고칠 때는 **그 씬을 Unity 에서 닫고** 해야 한다. 열어 둔 채 고치면
+에디터가 먼저 쓰면서 편집이 사라진다(에셋 편집과 같은 함정).
+
+### E7 — Resources 키 축의 이동
+
+키는 **가장 가까운 `/Resources/` 이후의 확장자 없는 경로**다. 그래서 무엇을 옮기느냐로
+결과가 갈린다. 둘을 나눠 돌렸다.
+
+**E7a — `Resources/` 폴더를 통째로 옮겼다** (`_McpEffectProbe/Resources` → `.../Moved/Resources`)
+
+| | 이동 전 | 이동 후 |
+|---|---|---|
+| `pathLoadEdges` / `resolved` / `unresolved` | 25 / 27 / 2 | **25 / 27 / 2** |
+| 프리팹의 `code.pathLoads` | 로더 1건 | **로더 1건 그대로** |
+| 콘솔 · 컴파일러 | — | 침묵 |
+
+**판정: 살아남는다.** 폴더째 옮기면 키가 안 바뀌므로 아무 일도 없다.
+`asset-path` 형태(E4)가 **깨졌던 것과 정반대**다 — 같은 "이동" 인데 축에 따라 결과가 다르다.
+
+**E7b — 에셋을 `Resources/` 아래 하위 폴더로 옮겼다** (`Resources/McpProbeRes` → `Resources/Sub/McpProbeRes`)
+
+| | 이동 전 | 이동 후 |
+|---|---|---|
+| `pathLoadEdges` / `resolved` / `unresolved` | 25 / 27 / 2 | **24 / 26 / 3** |
+| 프리팹의 `code.pathLoads` | 로더 1건 | **빈 배열** |
+| `danglingLoads` | 2 | **3** |
+| 콘솔 · 컴파일러 | — | **침묵** |
+
+새로 잡힌 dangling 항목:
+```json
+{ "file": "Assets/_McpEffectProbe/McpProbeResLoad.cs", "path": "McpProbeRes", "kind": "resources-key" }
+```
+
+**판정: 조용히 깨진다 — 그리고 도구가 잡는다.** 키가 `McpProbeRes` → `Sub/McpProbeRes` 로
+바뀌었으므로 `Resources.Load("McpProbeRes")` 는 런타임에 null 을 받는다. 컴파일러도 콘솔도
+아무 말이 없다. 2026-08-28 에 넣은 `danglingLoads` 가 **Resources 키 축에도 동작한다**는
+것을 여기서 확인했다(`kind: "resources-key"`).
+
+> 실무 교훈: `Resources/` **폴더 이름과 위치는 옮겨도 안전하지만, 그 안의 구조를 바꾸면
+> 키가 바뀐다.** 아트가 Resources 안을 정리하면 로드가 조용히 죽는다.
+
+### E8 — 씬 안의 배선에 대한 move / delete
+
+**기준선** (`McpProbeTarget::ProbeTargetMethod`)
+```
+inspectorWirings: ["Assets/_McpEffectProbe/McpProbeScene.unity"]
+byAxis: {codeCallers: 0, subclasses: 0, attachedAssets: 1, inspectorWirings: 1}
+```
+
+**E8a — 스크립트 이동** (`McpProbeTarget.cs` → `Moved/`)
+- `newGuid` 가 이동 전과 **같다**(`9e9b0992…`)
+- `inspectorWirings` 그대로, `attachedAssets` 그대로, 콘솔·컴파일러 침묵
+
+**판정: 살아남는다.** 프리팹(E4)과 같다 — **씬이라고 다르지 않다.**
+
+**E8b — 스크립트 삭제** (호출하는 코드가 없으므로 컴파일은 통과한다)
+- 컴파일 `errorCount: 0` (경고 3은 이 프로젝트의 기존 것), 콘솔 경고·에러 **0**
+- 씬의 그 컴포넌트: `className: MonoBehaviour` 로 떨어지고
+  **`displayName: McpProbeTarget` / `verified: false`** 로 나온다(ECID 승격, 2026-08-29)
+- `unity_find_missing_scripts` 가 잡는다 — 그리고 **GUID 만이 아니라 이름으로 답한다**:
+  `McpProbeTarget [script-not-in-project, compiles=false]`,
+  근거 `evidenceAsset: Assets/_McpEffectProbe/McpProbeScene.unity` (2026-08-31 기능)
+- ⚠️ **`inspectorWirings` 는 그대로 1 이다.** 배선 인덱스는 씬 YAML 의
+  `m_TargetAssemblyTypeName` + `m_MethodName` 을 읽으므로 타입이 사라져도 레코드는 남는다.
+  이건 오답이 아니라 **데이터를 정확히 말하는 것**이다 — 클래스를 되살리면 그 배선은 다시 산다.
+  반면 `attachedAssets` 축은 사라진다(타입이 해석 안 되므로 답할 수 없다)
+
+**판정: 주장대로다.** 그리고 씬은 프리팹과 **형태가 같다** — 하네스가 "형태가 같아 보이지만
+실험은 프리팹으로만 했다" 고 남겨 둔 항목을 여기서 닫는다.
+
+### 되돌린 상태 (검증됨)
+
+`Assets/_McpEffectProbe/` 를 통째로 지우고 재컴파일한 뒤 전부 기준선으로 돌아왔다:
+`referenceEdges` **6,275** · `pathLoadEdges/resolved/unresolved` **24/26/2** ·
+`danglingLoads` **2** · `missingScriptCount` **4**.
+
+⚠️ **곁가지 — 열려 있던 씬이 더럽혀졌다.** 픽스처 프리팹을 만들려고 `unity_create_gameobject`
+로 씬에 오브젝트를 만들었다 지웠는데, 그 씬(`0.BootStrapScene.unity`)이 `M` 로 떴다.
+내용 diff 는 **비어 있었다**(Unity 가 같은 내용으로 다시 썼다) — `git checkout --` 한 줄로
+정리했다. **씬을 건드리는 도구는 그 씬을 더럽힌다.** 픽스처는 새 씬(additive)에서 만들 것.
+
+
+## 덮지 못한 것
+
+~~Resources 키 축의 이동~~ · ~~씬 안의 배선에 대한 delete/move~~ —
+**둘 다 2026-08-31 에 돌렸다(위 E7·E8). 지금은 덮지 못한 것이 없다.**
+
+다음에 이 하네스를 다시 쓴다면 안 해 본 것은 이런 것들이다(필요해지면):
+- `Addressables` 축 (이 프로젝트는 그룹이 비어 있어 걸 대상이 없다)
+- 어셈블리 정의(`.asmdef`) 이동·이름 변경
+- 여러 씬이 additive 로 열려 있을 때의 배선
 
 ## 되돌리기
 
