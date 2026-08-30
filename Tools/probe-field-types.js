@@ -18,7 +18,10 @@ const ROOT = path.join(__dirname, '..');
 const tools = require(path.join(ROOT, 'Bridge/index/tools'));
 
 const PORT = 3000;
-const PROJECT = 'C:/Unity/MainProject';
+// 프로젝트 루트는 **브릿지가 실제로 인덱싱한 것**을 쓴다. 하드코딩하면 이 레포를 다른
+// 머신에 클론했을 때 검사가 통째로 죽는다. `ensureIndex` 뒤에 호출해야 하므로 함수다.
+const projectRoot = () => (tools._projectRoot && tools._projectRoot()) ||
+  process.env.UNITY_MCP_PROJECT || 'C:/Unity/MainProject';
 let pass = 0, fail = 0;
 
 function check(name, fn) {
@@ -144,7 +147,7 @@ check('디코딩한 타입이 디스크의 선언과 맞다 (표본 150, 전수 
     if (/[<>]/.test(info.name)) continue;
     const src = (info.sourceFiles || [])[0];
     if (!src) continue;
-    const abs = path.join(PROJECT, src);
+    const abs = path.join(projectRoot(), src);
     if (!fs.existsSync(abs)) continue;
     const text = fs.readFileSync(abs, 'utf8');
     for (const f of (info.fields || [])) {

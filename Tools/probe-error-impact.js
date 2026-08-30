@@ -45,7 +45,11 @@ if (!idx) {
   process.exit(2);
 }
 
-const ROOTDIR = 'C:/Unity/MainProject';
+// 프로젝트 루트는 **브릿지가 실제로 인덱싱한 것**을 쓴다. 하드코딩하면 이 레포를 다른
+// 머신에 클론했을 때 검사가 통째로 죽고, 더 나쁘게는 질의한 프로젝트와 파일을 읽는
+// 프로젝트가 어긋날 수 있다. `ensureIndex` 뒤에서만 유효하다(위에서 이미 불렀다).
+const ROOTDIR = (tools._projectRoot && tools._projectRoot()) ||
+  process.env.UNITY_MCP_PROJECT || 'C:/Unity/MainProject';
 const BA = 'Assets/1.Scripts/Unit/Weapon/BaseAttack.cs';
 
 console.log('\nP3-b — 진단 x 인덱스 조인');

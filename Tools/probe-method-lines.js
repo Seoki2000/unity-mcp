@@ -38,6 +38,12 @@ if (!idx) {
   process.exit(2);
 }
 
+// 디스크 대조에 쓰는 프로젝트 루트는 **브릿지가 실제로 인덱싱한 것**을 쓴다.
+// 하드코딩하면 이 레포를 다른 머신에 클론했을 때 대조가 통째로 죽고, 더 나쁘게는
+// 질의한 프로젝트와 파일을 읽는 프로젝트가 어긋난다.
+const ROOTDIR = (tools._projectRoot && tools._projectRoot()) ||
+  process.env.UNITY_MCP_PROJECT || 'C:/Unity/MainProject';
+
 function methodsOf(type) {
   const r = tools.callLocalTool('unity_get_type_symbols', { type }, PORT);
   const d = JSON.parse(r.content[0].text);
@@ -72,7 +78,7 @@ check('줄번호가 디스크의 소스와 맞다 (표본 20)', () => {
     try { m = methodsOf(name); } catch { continue; }
     const file = (m.td.sourceFiles || [])[0];
     if (!file) continue;
-    const abs = path.isAbsolute(file) ? file : path.join('C:/Unity/MainProject', file);
+    const abs = path.isAbsolute(file) ? file : path.join(ROOTDIR, file);
     if (!fs.existsSync(abs)) continue;
     const src = fs.readFileSync(abs, 'utf8').split(/\r?\n/);
     for (const mm of m.methods) {
@@ -252,7 +258,7 @@ check('본문 시작 위에 선언이 있다 (전수 디스크 대조)', () => {
   for (const s of allSpans().filter(isSourceDeclared)) {
     if (!bySrc.has(s.file)) {
       let src = null;
-      try { src = fs.readFileSync(path.join('C:/Unity/MainProject', s.file), 'utf8').split(/\r?\n/); } catch { src = null; }
+      try { src = fs.readFileSync(path.join(ROOTDIR, s.file), 'utf8').split(/\r?\n/); } catch { src = null; }
       bySrc.set(s.file, src);
     }
     const src = bySrc.get(s.file);
@@ -276,7 +282,7 @@ check('람다를 품은 메서드의 범위가 선언 뒤에 온다 (재현)', (
     for (const m of ((info && info.methods) || [])) if (m.name === 'Validate' && typeof m.line === 'number') span = m;
   }
   if (!span) return { ok: false, detail: 'Validate 의 줄 정보가 없다' };
-  const src = fs.readFileSync(path.join('C:/Unity/MainProject', file), 'utf8').split(/\r?\n/);
+  const src = fs.readFileSync(path.join(ROOTDIR, file), 'utf8').split(/\r?\n/);
   const decl = src.findIndex(t => /\bbool\s+Validate\s*\(/.test(t)) + 1;
   return { ok: decl > 0 && span.line >= decl && span.line <= decl + 3,
            detail: `선언 ${decl} / 인덱스 본문 ${span.line}-${span.endLine}` };

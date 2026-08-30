@@ -152,7 +152,7 @@ check('GUID 없는 컴포넌트를 세어 답한다 (독립 재집계와 일치)
   for (const p of idx2.guidToPath.values()) {
     if (!/[.](asset|prefab|unity|mat|controller|playable|vfx)$/i.test(p)) continue;
     let text;
-    try { text = fs2.readFileSync('C:/Unity/MainProject/' + p, 'latin1'); } catch { continue; }
+    try { text = fs2.readFileSync(root + '/' + p, 'latin1'); } catch { continue; }
     RE.lastIndex = 0;
     while (RE.exec(text) !== null) mine++;
   }

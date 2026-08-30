@@ -20,7 +20,9 @@ try:
 except Exception:
     pass
 
-PROJECT = os.environ.get("UNITY_PROJECT", r"C:/Unity/MainProject")
+# 브릿지와 같은 환경변수를 쓴다. 이름이 다르면 한쪽만 설정하고 다른 것을 재게 된다.
+PROJECT = (os.environ.get("UNITY_MCP_PROJECT") or os.environ.get("UNITY_PROJECT")
+           or r"C:/Unity/MainProject")
 ASSETS = os.path.join(PROJECT, "Assets").replace("\\", "/")
 ADDR = os.path.join(ASSETS, "AddressableAssetsData/AssetGroups").replace("\\", "/")
 
