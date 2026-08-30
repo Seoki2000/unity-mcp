@@ -155,7 +155,7 @@ P3-b 줄 귀속 정밀화 · `effectByOperation` 실검증 · Missing Script 전
 | 항목 | 상태 |
 |---|---|
 | 리포 | 워킹트리 깨끗, 브랜치 `optimized`. **2026-08-29 에 사용자 확인을 받아 원격(`Seoki2000/unity-mcp`)에 올렸다 — ahead 0 / behind 0.** 정확한 HEAD 는 `git log --oneline` 으로 볼 것 — 여기 해시를 적으면 그 커밋 자신 때문에 항상 낡는다 |
-| **Unity** | **꺼져 있다.** 세션 후반의 실검증(E4~E6)과 정리에 필요해서 켰다가, 정리를 끝내고 `File/Exit` 로 껐다(넘겨받은 상태와 같다). 켜는 방법은 아래 "Unity 를 켤 때" |
+| **Unity** | **켜져 있다** (2026-08-30). §4-(46) 의 창 수정을 라이브로 검증하려고 켰고 그대로 뒀다. 컴파일 깨끗(에러 0 · 콘솔 에러 0). ⚠️ **직렬화 에셋을 고치거나 지우는 작업은 끄고 할 것**(§0.5 함정 표). 끄려면 `File/Exit`. 켜는 방법과 준비 확인은 아래 "Unity 를 켤 때" |
 | **게임 레포** | `C:/Unity/MainProject` 브랜치 `feature/Boss23` — **2026-08-29 에 push 완료(ahead 0)**. 올라간 것은 `3429479`(고아 컴포넌트 9개 제거, §5) · `b7c41cf`(오클루전 A군 종결 기록) · `5b54f18`(이 패키지 핀을 `a191eee` -> `2d55d15` 로, 102 커밋) · 셋업 문서·검사 스크립트·아트 리비전 핀(`Docs/tech/environment-setup.md` · `check-environment.py` · `art-svn.json`). **origin 은 팀 레포(`Fujino-Tatsuya/MainProject`)이고 브랜치는 본인 것**이다(최근 커밋 전부 `Seoki2000`). 남아 있는 `M ProjectSettings/EditorBuildSettings.asset` 는 이 작업과 무관하고 **일부러 안 건드렸다** |
 | `tools/list` | **85개 / 43,368 B / 도구당 510.2** — 배열 기준(2026-08-28 실측, Unity 켜짐). 응답 줄 43,412 B, 디스크 캐시 43,415 B. ⚠️ **2026-08-29 에 `unity_get_asset_components` 설명이 +288 B 늘었다**(ECID 승격을 설명하는 한 문장, 약 72 토큰/세션) — 그러니 지금은 43,656 B 근처일 것이다. Unity 없이 잰 **로컬 12개 도구** 배열은 10,868 → **11,156 B**. 85개 기준은 Unity 를 켤 때 다시 잴 것 |
 | 인덱스 캐시 | **버전 17**(12 에서 다섯 번 올림 — 구 캐시는 틀린 줄 범위·짧은 `endLine`·빠진 두 번째 문서 범위·`danglingLoads` 부재·빠진 경로 로드 엣지를 담는다), **4,473,393 B(약 4.47 MB, `guidCoverage: assets`)** — 전체 커버리지로 빌드하면 약 **8.16 MB** 다. 어느 커버리지인지 안 적으면 두 배 차이가 회귀로 보인다 (`fileIndex` 588 + `extraSpans` 5 + `danglingLoads` 2). 참조 엣지 **6,306** · 호출 엣지 8,673 · 시그니처 엣지 8,848 · `guidToPath` 3,142 |
@@ -257,6 +257,7 @@ node Tools/sweep-field-checks.js | tail -5     # §6 전수 집계 (약 32 s, Un
 | **한글 `\uXXXX` 이스케이프** | 손으로 이스케이프하면 조용히 뜻이 바뀐다 — "지웠다"→"지우메", "참조"→"추적" 이 실제로 문서에 들어갔다. 텍스트는 파일로 넘기고(`cat > f <<'EOF'`) python 이 `encoding='utf-8'` 로 읽어 치환할 것. 콘솔이 깨져 보이는 것과 파일이 깨진 것은 다르니 확인은 **파일을 다시 읽어서** 한다 |
 | **참조 수의 단위** | 도구가 말하는 "참조 N"(`totalReferenceCount`)은 **(에셋, GUID) 쌍**이다. 컴포넌트 인스턴스 수가 아니다. 오클루전 A군은 쌍 132 인데 실제 컴포넌트는 **560** 이었다 — 정리 규모를 쌍으로 잡으면 4배 이상 어긋난다. 원본 YAML 직접 집계는 `Tools/scan/occlusion-reach.py` (§4-(44)) |
 | **Missing Script 의 두 가지 뜻** | "코드가 사라진 흔적" 일 수도 있고 **"코드가 아직 안 온 흔적"**(미머지 브랜치) 일 수도 있다. 처방이 정반대다. 판단 전에 `git log --all -S "<클래스명>"` 과 `git merge-base --is-ancestor <커밋> HEAD` 를 먼저 돌릴 것 — 오클루전 3개는 두 세션 동안 "의도된 삭제" 로 오해돼 있었다(§4-(44)) |
+| **`Packages/` 는 에디터 안에서만 뚫린다** | 에디터 프로세스 안에서는 `System.IO` 가 `Packages/<패키지>/...` 를 실제 위치로 리다이렉트한다 — `File.Exists` 가 **true** 를 내고 `Path.GetFullPath` 가 `C:/dev/unity-mcp/...` 를 준다. **파일시스템 링크가 아니라 인프로세스 가상화라 셸에서는 원리적으로 안 보인다**(Unity 가 켜져 있어도 `ls Packages/` 는 manifest·lock 둘뿐이다). 에디터 코드의 경로 판정을 셸에서 재고 결론 내지 말 것 — 2026-08-30 에 그렇게 틀렸다(§4-(46)) |
 | 절대경로 입력 | 인덱스 도구는 조용한 0 이 아니라 **명시적 에러**를 낸다(`Could not resolve ... to a GUID`) |
 | §4-(21) 회귀 | 없음. `BombAction` → `totalCount 0` + `referencedByTypeName [Wells.asset]` + "NOT unused" note |
 
@@ -359,12 +360,10 @@ node Tools/sweep-field-checks.js | tail -5     # §6 전수 집계 (약 32 s, Un
 
 ### Unity 를 켤 때 알아 둘 것
 
-- 🔴 **먼저 할 것: `Window/MCP Server` 를 열어 경로가 실제로 채워지는지 볼 것.**
-  2026-08-30 에 그 창의 경로 탐색을 고쳤는데(§4-(46)) Unity 가 꺼져 있어
-  **오프라인 컴파일까지만 확인했다.** 봐야 할 것 셋: `Launcher Path` 가
-  `.../Bridge/mcp-bridge-launcher.js` 로 채워지는가 · `Resolved Package` 가
-  지금 도는 출처(로컬이면 `Local  C:/dev/unity-mcp`)를 말하는가 ·
-  `Copy Config to Clipboard` 결과에 `[BRIDGE_PATH]` 가 없는가
+- ✅ `Window/MCP Server` 의 경로 탐색은 **2026-08-30 에 라이브로 검증했다**(§4-(46)).
+  런처 경로가 채워지고 `Resolved Package` 가 `Local  C:/dev/unity-mcp` 를 답한다.
+  **아직 안 본 것: git URL 로 받은 환경**에서 `resolvedPath` 가
+  `Library/PackageCache/...@해시` 를 주는지. 그런 환경이 생기면 볼 것
 - **준비 확인은 포트로 한다.** `~/.unity-mcp/auth-token-3000.json` 은 에디터를 재시작해도
   **갱신되지 않는다**(토큰 재사용). mtime 을 준비 신호로 쓰면 영원히 기다린다.
   `Get-NetTCPConnection -LocalPort 3000 -State Listen` 이 `::1` 과 `127.0.0.1` 둘 다 뜨면 준비된 것이다.
@@ -656,6 +655,7 @@ dotnet build-server shutdown
 | **응답을 설계할 때** | (12) 부분 커버리지에서 `exists: false` 를 쓰지 말 것 · (17) 조용히 잘리는 것은 계속 새 형태로 나온다 · **(29) 제시한 길이 막다른 길이면 거절만도 못하다** · **(35) 지표 이름을 바꿀 때 그 이름이 이미 쓰이는지 보라** |
 | **백로그 항목을 착수할 때** | **(28) 전제부터 다시 재라** · **(35) 백로그가 적은 이름이 이미 다른 뜻으로 있을 수 있다** · **(37) 문구대로 만들면 답이 안 나오는 항목이 있다 — 조인 키부터 확인하라** |
 | **셋업·재현을 다룰 때** | **(46) 우회로를 문서화하면 정문이 고장 난 것을 아무도 보고하지 않는다 — UI 가 문서와 같은 답을 내는지 같이 확인하라. 그리고 새 위치에 파일을 만들면 커밋 전에 `git check-ignore -v`** |
+| **에디터 안의 동작을 판단할 때** | **(46) 끄고 잰 값으로 켜고 도는 코드를 판단하지 말라 — 파일 존재 여부마저 조건이 다르면 다른 답이 나온다** · (39) 조건 없는 관측 |
 | **도구를 늘릴지 말지** | (20) 기존 질문의 빠진 답인가 새 질문인가 · **(25) 그 원칙을 과잉적용했다 — 적용 조건까지 적어라** |
 | **캐시를 건드릴 때** | (13) 캐시와 도구 목록이 조용히 죽어 있었다 · (18) 캐시 버전을 안 올리면 고친 것이 안 먹는다 · (34) 디코딩을 고치면 구 캐시가 틀린 값을 담고 있다 |
 | **바이너리 규격을 디코딩할 때** | **(34) 상태 변수 하나가 두 뜻을 가지면 어긋난다 — 규격의 조건절마다 상태를 따로 두라** |
@@ -1465,31 +1465,78 @@ ECID 없음 **292**, 합 **822**. 셋 다 정확히 재현됐다.
 **(46) 정문이 막혀 있는데 아무도 몰랐다 — 문서가 있는 우회로를 다들 쓰고 있었기 때문이다 (2026-08-30).**
 
 "git 과 svn 만 받으면 다른 환경에서 되는가" 를 감사하다가, 이 패키지의 **첫 셋업 경로가
-통째로 깨져 있다**는 것을 찾았다. `Window/MCP Server` 의 **Copy Config to Clipboard** 는
-설정 문자열에 경로 대신 `[BRIDGE_PATH]` 플레이스홀더를 넣고 있었다. 두 군데가 동시에 틀렸다:
+잘못된 것을 등록하고 있다**는 것을 찾았다. `Window/MCP Server` 의 **Copy Config to
+Clipboard** 가 런처가 아니라 **브릿지를 직접** 가리키는 설정을 내고 있었다.
 
-1. `AssetDatabase.FindAssets("mcp-bridge t:TextAsset")` — `.js` 는 `DefaultImporter` 로
+⚠️ **처음 진단의 절반은 틀렸다. 아래 2번을 먼저 읽을 것** — 그 오진 자체가 이 항목의
+두 번째 교훈이다.
+
+1. ✅ `AssetDatabase.FindAssets("mcp-bridge t:TextAsset")` — `.js` 는 `DefaultImporter` 로
    임포트돼 `DefaultAsset` 이 된다. **`t:TextAsset` 필터는 원리적으로 못 맞춘다.**
-   `.meta` 를 보면 바로 나오는데, 아무도 안 봤다
-2. 폴백의 `Packages/com.community.unity-mcp/Bridge/mcp-bridge.js` 는 Unity 의 **가상 경로**다.
-   `File.Exists` 는 디스크를 본다. git URL 로 받으면 실체가
-   `Library/PackageCache/...@해시/` 에 있고, 로컬 `file:` 참조면 그 원본 폴더에 있다.
-   **어느 쪽에서도 그 물리 경로는 존재하지 않는다** (실측: 이 프로젝트의 `Packages/` 에는
-   `manifest.json` 과 `packages-lock.json` 둘뿐이다)
+   `.meta` 를 보면 바로 나오는데 아무도 안 봤다. 라이브로 확인: **결과 0건.**
+   그래서 **항상 폴백으로 넘어가고 있었다.**
 
-**왜 안 걸렸나 — 이게 교훈이다.** `LOCAL_DEV_SETUP.md` 가 "런처를 고정 경로로 등록하라" 는
+2. ❌ **내가 틀린 것.** "폴백의 `Packages/com.community.unity-mcp/Bridge/mcp-bridge.js` 는
+   Unity 의 가상 경로라 `File.Exists` 가 못 찾고, 그래서 설정에 `[BRIDGE_PATH]`
+   플레이스홀더가 나간다" 고 적고 그대로 커밋했다. **아니다.**
+   Unity 에디터 안에서는 그 경로가 **뚫린다** — 라이브 실측:
+
+   ```
+   CWD           : C:\Unity\MainProject
+   File.Exists("Packages/com.community.unity-mcp/Bridge/mcp-bridge.js")  : True
+   Path.GetFullPath(...)                                                 : C:\dev\unity-mcp\Bridge\mcp-bridge.js
+   Directory.Exists("Packages/com.community.unity-mcp")                  : True
+   ```
+
+   **왜 틀렸나: Unity 를 끄고 잰 값으로 Unity 안에서 도는 코드를 판단했다.**
+   셸에서 `ls Packages/` 를 하면 `manifest.json` 과 `packages-lock.json` 둘뿐이고,
+   **Unity 가 켜져 있어도 그대로다**(정션도 심링크도 안 생긴다). 그런데 에디터 프로세스
+   안에서는 `System.IO` 가 `Packages/<패키지>/...` 를 실제 위치로 리다이렉트한다.
+   파일시스템 링크가 아니라 **인프로세스 가상화**라, 밖에서는 원리적으로 안 보인다.
+   그래서 옛 코드는 플레이스홀더를 낸 게 아니라 **브릿지의 실경로**를 냈다.
+
+   → 이 프로젝트의 `Packages/` 에 파일이 둘뿐이라는 관측 자체는 맞았다. **관측을 잘못
+   해석했다.** §0.5 함정 표의 "조건을 안 적으면 다른 것을 잰다" 가 또 나온 것이고,
+   이번 조건은 **Unity 가 켜져 있느냐**였다.
+
+**그래서 진짜 결함은 무엇이었나.** 플레이스홀더가 아니라 **런처 대신 브릿지를 등록시키는
+것**이다. 로컬 `file:` 로 쓰는 사람에게는 경로가 안정적이라 티가 안 난다. 하지만 git URL 로
+받는 사람에게 그 경로는 `Library/PackageCache/com.community.unity-mcp@<해시>/Bridge/
+mcp-bridge.js` 이고, **핀을 올리는 순간 폴더 이름이 바뀌어** 조용히 낡은 사본을 돌리거나
+사라진 경로를 가리킨다. 런처가 존재하는 이유가 정확히 그것인데, 창은 런처를 고를 수
+있는 코드가 아예 없었다.
+
+**왜 안 걸렸나 — 첫 번째 교훈.** `LOCAL_DEV_SETUP.md` 가 "런처를 고정 경로로 등록하라" 는
 **손으로 하는 절차**를 적어 두었고, 이 레포를 만지는 사람은 전부 그 길로 들어왔다.
 정문(에디터 창)은 새로 오는 사람만 쓰는데, 새로 온 사람이 없었다.
 **우회로를 문서화하면 정문이 고장 난 것을 아무도 보고하지 않는다.**
 셋업 절차를 문서로 적을 때는 **UI 가 같은 답을 내는지도 같이 확인할 것.**
+
+**두 번째 교훈.** 위 2번이다. **끄고 잰 값으로 켜고 도는 코드를 판단하지 말 것.**
+이 레포는 이미 같은 형태로 세 번 데었다(콜드 빌드 시간 · CS 경고 0건 · 컴파일 실패 시
+어셈블리 갱신). 이번엔 **파일 존재 여부**였다 — 가장 의심하지 않는 종류의 사실이라
+더 잘 통과한다. 에디터 안에서 도는 코드의 경로 판정은 **에디터 안에서** 재라.
 
 고친 것: `PackageInfo.resolvedPath` 로 실체 경로를 구하고 **런처를 우선**한다(런처는 실행
 시점에 브릿지를 다시 찾으므로 핀이 바뀌어도 안 깨진다). 런처가 없는 옛 핀이면 브릿지를
 주되 "핀을 올리면 깨진다" 고 경고한다. 그리고 **Resolved Package** 줄로 지금 실제로 도는
 패키지의 출처(로컬 경로 / git 해시)를 보여준다 — `manifest.json` 에 `skip-worktree` 가
 걸려 있으면 커밋된 핀과 도는 것이 다를 수 있고 `git status` 에는 안 나오기 때문이다.
-Unity 가 꺼져 있어 `LOCAL_DEV_SETUP.md` 의 오프라인 csc 로 컴파일만 확인했다(종료코드 0).
-⚠️ **런타임 검증은 아직 안 했다** — 다음에 Unity 를 켜면 창을 열어 경로가 실제로 채워지는지 볼 것.
+
+**런타임 검증 완료 (2026-08-30, Unity 6000.3.16f1 라이브).** 진짜 창 인스턴스의 private
+필드를 리플렉션으로 읽었다(로직을 다시 구현해 재현하면 그 사본이 통과한 것일 뿐이다):
+
+```
+_bridgePath    : C:/dev/unity-mcp/Bridge/mcp-bridge-launcher.js
+_usingLauncher : True
+_packageSource : Local  C:/dev/unity-mcp
+런처를 가리키나 : True     [BRIDGE_PATH] 남나 : False
+PackageInfo    : Local / 2.3.0-dev.0.0.7   resolvedPath : C:\dev\unity-mcp
+```
+
+⚠️ **git URL 로 받은 경우는 아직 실검증 안 했다.** 이 머신은 로컬 `file:` 참조를 쓴다.
+핀으로 받는 환경에서 `resolvedPath` 가 `Library/PackageCache/...@해시` 를 주는지는
+다음에 그런 환경이 생기면 볼 것.
 
 곁가지 셋:
 
